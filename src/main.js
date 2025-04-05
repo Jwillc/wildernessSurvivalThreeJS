@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls';
 import { Inventory, Item } from './inventory.js';
 import { BuildingSystem } from './buildingSystem.js';
+import { Terminal } from './terminal.js';
 
 const savedAxePosition = localStorage.getItem('axePosition');
 const savedAxeRotation = localStorage.getItem('axeRotation');
@@ -49,10 +50,13 @@ let axeAnimationDuration = 500; // milliseconds
 // Global flag to force blueprint cleanup
 let forceCleanupBlueprint = false;
 
+// Terminal
+let terminal = null;
+
 // Collision detection variables
-const PLAYER_HEIGHT = 1.8;
-const PLAYER_RADIUS = 0.3;
-const COLLISION_THRESHOLD = 0.1; // Minimum distance to obstacles
+const PLAYER_HEIGHT = 1.4; // Further reduced height to fit in structures
+const PLAYER_RADIUS = 0.2; // Further reduced radius to fit through doorways
+const COLLISION_THRESHOLD = 0.03; // Minimal threshold for very tight movement
 
 const CHOP_DISTANCE = 3;
 const CHOPS_TO_FELL = 5;
@@ -83,16 +87,15 @@ function checkCollision(position, direction, distance) {
     // Normalize direction
     const rayDirection = direction.clone().normalize();
 
-    // Cast multiple rays to simulate a capsule (player body)
-    // We'll cast rays at foot level, waist level, and head level
+    // Cast minimal rays to simulate a very small player capsule
+    // Using only two rays for better fit in tight structures
     const rayOrigins = [
-        position.clone(), // Foot level
-        position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT / 2, 0)), // Waist level
-        position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT - 0.2, 0)) // Head level
+        position.clone().add(new THREE.Vector3(0, 0.2, 0)), // Above foot level
+        position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT - 0.4, 0)) // Well below head level
     ];
 
-    // Also cast rays from the sides to simulate the player's width
-    const sideOffset = PLAYER_RADIUS * 0.8; // Slightly less than full radius for better gameplay
+    // Cast minimal side rays with a very small offset
+    const sideOffset = PLAYER_RADIUS * 0.6; // Minimal side offset for very tight spaces
 
     // Calculate perpendicular vector to movement direction (on xz plane)
     const perpVector = new THREE.Vector3(-rayDirection.z, 0, rayDirection.x).normalize();
@@ -152,7 +155,7 @@ function init() {
         scene.background = new THREE.Color(0x87ceeb);
 
         camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 2, 0);
+        camera.position.set(0, 1.5, 0); // Further reduced height to match smaller player height
         scene.add(camera);
 
         // Create renderer
@@ -208,6 +211,13 @@ function init() {
         inventory = new Inventory();
         buildingSystem = new BuildingSystem(scene, camera, inventory);
         setupInteractionControls(); // Add this line to initialize interaction controls
+
+        // Initialize terminal
+        terminal = new Terminal({
+            controls: controls,
+            inventory: inventory,
+            buildingSystem: buildingSystem
+        });
 
         // Add objects
         addEnvironmentObjects();
@@ -755,6 +765,20 @@ function setupEditorControls() {
 }
 
 function onKeyDown(event) {
+    // Handle terminal toggle with ~ key (Backquote)
+    if (event.code === 'Backquote') {
+        if (terminal) {
+            terminal.toggle();
+            event.preventDefault();
+            return;
+        }
+    }
+
+    // Don't process other keys when terminal is open
+    if (terminal && terminal.isOpen) {
+        return;
+    }
+
     if (editorMode) return;
 
     switch (event.code) {
@@ -787,7 +811,12 @@ function onKeyDown(event) {
                 forceCleanupAllBlueprints();
             }
 
-            if (!buildingSystem.isBuilding) {
+            // Toggle the building menu: close if open, open if closed
+            if (buildingSystem.isBuildingMenuOpen()) {
+                console.log('B KEY: Closing building menu');
+                buildingSystem.hideBuildingMenu();
+            } else if (!buildingSystem.isBuilding) {
+                console.log('B KEY: Opening building menu');
                 buildingSystem.showBuildingMenu();
             }
             break;
@@ -805,6 +834,11 @@ function onKeyDown(event) {
 }
 
 function onKeyUp(event) {
+    // Don't process keys when terminal is open
+    if (terminal && terminal.isOpen) {
+        return;
+    }
+
     if (editorMode) return;
 
     switch (event.code) {
