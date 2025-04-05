@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls';
 import { Inventory, Item } from './inventory.js';
+import { BuildingSystem } from './buildingSystem.js';
 
 const savedAxePosition = localStorage.getItem('axePosition');
 const savedAxeRotation = localStorage.getItem('axeRotation');
@@ -41,16 +42,19 @@ let spacePressed = false;
 const CHOP_DISTANCE = 3;
 const CHOPS_TO_FELL = 5;
 const treeHealth = new Map();
+let buildingSystem;
+
+// Wait for DOM to be ready
+document.addEventListener('DOMContentLoaded', () => {
+    init();
+});
 
 function init() {
-    console.log('Init started');
-    
     try {
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87ceeb);
 
-        const mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera = mainCamera;
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         camera.position.set(0, 2, 0);
         scene.add(camera);
 
@@ -60,6 +64,7 @@ function init() {
         renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
+        // Basic lighting
         const ambientLight = new THREE.AmbientLight(0x404040, 2);
         scene.add(ambientLight);
         
@@ -68,6 +73,7 @@ function init() {
         directionalLight.castShadow = true;
         scene.add(directionalLight);
 
+        // Ground
         const groundGeometry = new THREE.PlaneGeometry(100, 100);
         const groundMaterial = new THREE.MeshStandardMaterial({ 
             color: 0x33aa33,
@@ -79,6 +85,7 @@ function init() {
         ground.receiveShadow = true;
         scene.add(ground);
 
+        // Initialize controls
         controls = new PointerLockControls(camera, document.body);
 
         document.addEventListener('click', function () {
@@ -88,13 +95,18 @@ function init() {
         document.addEventListener('keydown', onKeyDown);
         document.addEventListener('keyup', onKeyUp);
 
+        // Initialize systems
         inventory = new Inventory();
-        setupInteractionControls();
-        setupEditorControls();
+        buildingSystem = new BuildingSystem(scene, camera, inventory);
+        setupInteractionControls(); // Add this line to initialize interaction controls
 
+        // Add objects
         addEnvironmentObjects();
 
+        // Start animation loop
         animate();
+
+        console.log('Initialization complete');
     } catch (error) {
         console.error('Error during initialization:', error);
     }
@@ -145,7 +157,7 @@ function animate() {
                 let allSettled = true;
                 child.children.forEach(particle => {
                     particle.position.add(particle.userData.velocity);
-                    particle.userData.velocity.y -= 0.01; // Gravity
+                    particle.userData.velocity.y -= 0.01;
                     
                     if (particle.position.y > -2) {
                         allSettled = false;
@@ -157,12 +169,14 @@ function animate() {
                 }
             }
         });
+
+        if (buildingSystem.isBuilding) {
+            buildingSystem.updateBlueprintPosition(raycaster);
+        }
     }
 
     renderer.render(scene, camera);
 }
-
-init();
 
 function setupInteractionControls() {
     document.addEventListener('keydown', (event) => {
@@ -180,6 +194,11 @@ function setupInteractionControls() {
 function tryInteract() {
     if (!controls.isLocked) return;
 
+    if (buildingSystem.isBuilding) {
+        buildingSystem.build();
+        return;
+    }
+
     raycaster.setFromCamera(new THREE.Vector2(), camera);
     const intersects = raycaster.intersectObjects(interactableObjects, true);
 
@@ -193,6 +212,16 @@ function tryInteract() {
             updatePrompts('');
         } else if (type === 'rock') {
             inventory.addItem(new Item('rock'));
+            scene.remove(parentObject);
+            const index = interactableObjects.indexOf(parentObject);
+            if (index > -1) {
+                interactableObjects.splice(index, 1);
+            }
+            updatePrompts('');
+        } else if (type === 'logs') {
+            for (let i = 0; i < 5; i++) {
+                inventory.addItem(new Item('log'));
+            }
             scene.remove(parentObject);
             const index = interactableObjects.indexOf(parentObject);
             if (index > -1) {
@@ -323,6 +352,7 @@ function tryChopTree() {
             if (newHealth >= CHOPS_TO_FELL) {
                 const logPile = createLogPile(tree.position);
                 scene.add(logPile);
+                interactableObjects.push(logPile);
                 
                 const index = interactableObjects.indexOf(tree);
                 if (index > -1) {
@@ -499,6 +529,16 @@ function onKeyDown(event) {
             if (inventory.hasItems(['axe'])) {
                 spacePressed = true;
                 tryChopTree();
+            }
+            break;
+        case 'KeyB':
+            if (!buildingSystem.isBuilding) {
+                buildingSystem.showBuildingMenu();
+            }
+            break;
+        case 'Escape':
+            if (buildingSystem.isBuilding) {
+                buildingSystem.cancelBuilding();
             }
             break;
     }

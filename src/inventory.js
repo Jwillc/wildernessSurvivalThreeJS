@@ -30,9 +30,14 @@ export class Inventory {
         );
     }
 
+    getItemCount(itemType) {
+        return this.slots.filter(slot => slot?.type === itemType).length;
+    }
+
     updateUI() {
         this.slots.forEach((item, index) => {
-            this.slotElements[index].textContent = item ? item.type : '';
+            const count = item ? this.getItemCount(item.type) : 0;
+            this.slotElements[index].textContent = item ? `${item.type} (${count})` : '';
         });
     }
 }
