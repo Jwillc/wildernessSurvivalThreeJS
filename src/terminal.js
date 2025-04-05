@@ -8,13 +8,15 @@ export class Terminal {
         this.controls = game.controls;
         this.inventory = game.inventory;
         this.buildingSystem = game.buildingSystem;
+        this.craftingSystem = game.craftingSystem;
         this.isOpen = false;
         this.commandHistory = [];
         this.historyIndex = -1;
         this.commands = {
             'help': this.showHelp.bind(this),
             'unlimited logs': this.unlimitedLogs.bind(this),
-            'clear': this.clear.bind(this)
+            'clear': this.clear.bind(this),
+            'reload models': this.reloadModels.bind(this)
         };
 
         // Get DOM elements
@@ -145,6 +147,16 @@ export class Terminal {
         this.print('  help - Show this help message');
         this.print('  unlimited logs - Toggle unlimited logs for testing');
         this.print('  clear - Clear the terminal');
+        this.print('  reload models - Reload crafting models if they failed to load');
+    }
+
+    reloadModels() {
+        if (this.craftingSystem) {
+            const result = this.craftingSystem.reloadModels();
+            this.print(result);
+        } else {
+            this.print('Crafting system not initialized');
+        }
     }
 
     unlimitedLogs() {

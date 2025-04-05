@@ -20,6 +20,14 @@ Build a structure
 - Place doors on walls
 - Doors cannot be passed through at the moment
 
+Craft a bonfire
+- Press I to open the crafting menu
+- Select bonfire from the list
+- Make sure you have 5 logs and 5 rocks in inventory
+- Press E to place bonfire
+- Gather 2 rocks and a stick
+- Press E to light the bonfire
+
 Thats it! That's all there is to do for now.
 
 # Wilderness Survival

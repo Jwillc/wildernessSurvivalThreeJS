@@ -60,7 +60,7 @@ export class BuildingSystem {
         this.wallRotations = [0, Math.PI/2, Math.PI, Math.PI*3/2];
 
         // Snapping settings
-        this.snapDistance = 2.5; // Distance at which pieces will snap (increased for better detection)
+        this.snapDistance = 4.0; // Distance at which pieces will snap (increased for better roof-to-foundation detection)
         this.isSnapping = false; // Whether currently snapping to another piece
 
         // Debug flag
@@ -80,7 +80,7 @@ export class BuildingSystem {
         menu.style.color = 'white';
         menu.style.pointerEvents = 'none'; // Prevent mouse interaction
 
-        const options = ['wall', 'foundation', 'roof', 'window'];
+        const options = ['wall', 'foundation', 'roof', 'window', 'door'];
         options.forEach((type, index) => {
             const option = document.createElement('div');
             option.textContent = `${index + 1}: ${type.charAt(0).toUpperCase() + type.slice(1)}`;
@@ -305,6 +305,11 @@ export class BuildingSystem {
                     continue;
                 }
 
+                // Extra debug for roof-to-foundation snapping
+                if (this.buildingType === 'roof' && piece.userData.buildingType === 'foundation') {
+                    console.log('Found foundation for roof snapping:', piece.position);
+                }
+
                 compatibleCount++;
 
                 // Calculate distance between pieces
@@ -483,11 +488,6 @@ export class BuildingSystem {
             // Add to placed pieces for snapping and collision detection
             this.placedPieces.push(buildingPiece);
 
-            // If we just placed a foundation, automatically add a roof above it
-            if (this.buildingType === 'foundation') {
-                this.addRoofAboveFoundation(buildingPiece);
-            }
-
             if (this.debug) {
                 console.log(`Added ${this.buildingType} to placed pieces. Total pieces: ${this.placedPieces.length}`);
                 console.log('Placed pieces:', this.placedPieces.map(p => p.userData.buildingType));
@@ -610,11 +610,13 @@ export class BuildingSystem {
         if (blueprintType === 'wall' && pieceType === 'foundation') return true;
         // Removed wall-to-wall snapping to simplify building
 
-        // Roofs can only snap to foundations (not walls)
-        if (blueprintType === 'roof' && pieceType === 'foundation') return true;
+        // Roofs can only snap to foundations
+        if (blueprintType === 'roof' && pieceType === 'foundation') {
+            console.log('ROOF SNAPPING: Can snap roof to foundation');
+            return true;
+        }
 
-        // Allow roof-to-roof snapping for extending roofs
-        if (blueprintType === 'roof' && pieceType === 'roof') return true;
+        // Removed roof-to-roof snapping
 
         // Allow foundation-to-foundation snapping
         if (blueprintType === 'foundation' && pieceType === 'foundation') return true;
@@ -628,9 +630,20 @@ export class BuildingSystem {
         const blueprintType = this.buildingType;
         const pieceType = piece.userData.buildingType;
 
+        // Extra debug for roof-to-foundation snapping
+        if (blueprintType === 'roof' && pieceType === 'foundation') {
+            console.log('ROOF SNAPPING: getSnapPosition called for roof-to-foundation');
+        }
+
         // Get piece dimensions
         const pieceSize = this.getPieceSize(pieceType);
         const blueprintSize = this.getPieceSize(blueprintType);
+
+        // Verify dimensions are valid
+        if (!pieceSize || !blueprintSize) {
+            console.error('Invalid piece dimensions:', pieceSize, blueprintSize);
+            return snapPos;
+        }
 
         // Start with the piece position
         snapPos.copy(piece.position);
@@ -667,6 +680,8 @@ export class BuildingSystem {
 
         // Roof snapping to foundation - place roof directly above foundation at wall height
         else if (blueprintType === 'roof' && pieceType === 'foundation') {
+            console.log('ROOF SNAPPING: Calculating roof-to-foundation snap position');
+
             // Position the roof directly above the foundation
             snapPos.x = piece.position.x;
             snapPos.z = piece.position.z;
@@ -678,7 +693,14 @@ export class BuildingSystem {
 
             // Calculate the height of the roof (foundation + wall height)
             // This places the bottom of the roof at the top of the wall
-            snapPos.y = piece.position.y + foundationHeight/2 + wallHeight + roofHeight/2;
+            snapPos.y = piece.position.y + foundationHeight/2 + wallHeight - roofHeight/2;
+
+            console.log('ROOF SNAPPING: Roof snapping directly above foundation at wall height');
+            console.log('ROOF SNAPPING: Foundation position:', piece.position);
+            console.log('ROOF SNAPPING: Foundation dimensions:', pieceSize);
+            console.log('ROOF SNAPPING: Wall height:', wallHeight);
+            console.log('ROOF SNAPPING: Roof height:', roofHeight);
+            console.log('ROOF SNAPPING: Snap position:', snapPos);
 
             if (this.debug) {
                 console.log('Roof snapping directly above foundation at wall height');
@@ -689,41 +711,7 @@ export class BuildingSystem {
             }
         }
 
-        // Roof snapping to roof - exactly like foundation snapping to foundation
-        else if (blueprintType === 'roof' && pieceType === 'roof') {
-            // Determine which edge to snap to
-            const localPos = this.currentBlueprint.position.clone().sub(piece.position);
-            localPos.applyEuler(new THREE.Euler(0, -piece.rotation.y, 0)); // Transform to local space
-
-            // Snap to the closest edge
-            const absX = Math.abs(localPos.x);
-            const absZ = Math.abs(localPos.z);
-
-            // Get the exact dimensions for precise alignment
-            const existingRoofWidth = pieceSize.x;
-            const existingRoofDepth = pieceSize.z;
-
-            if (absX > absZ) {
-                // Snap to X edge
-                snapPos.x = piece.position.x + (localPos.x > 0 ? 1 : -1) * existingRoofWidth;
-                // Keep Z position the same
-                snapPos.z = piece.position.z;
-            } else {
-                // Snap to Z edge
-                snapPos.z = piece.position.z + (localPos.z > 0 ? 1 : -1) * existingRoofDepth;
-                // Keep X position the same
-                snapPos.x = piece.position.x;
-            }
-
-            // Keep same Y position
-            snapPos.y = piece.position.y;
-
-            if (this.debug) {
-                console.log('Roof snapping to roof edge');
-                console.log('Snap direction:', absX > absZ ? 'X edge' : 'Z edge');
-                console.log('Snap position:', snapPos);
-            }
-        }
+        // Removed roof-to-roof snapping
 
         // Foundation snapping to foundation
         else if (blueprintType === 'foundation' && pieceType === 'foundation') {
@@ -788,21 +776,17 @@ export class BuildingSystem {
             // Match the foundation's rotation
             snapRot.y = piece.rotation.y;
 
+            console.log('ROOF SNAPPING: Setting roof rotation to match foundation');
+            console.log('ROOF SNAPPING: Foundation rotation:', piece.rotation.y);
+            console.log('ROOF SNAPPING: Snap rotation:', snapRot.y);
+
             if (this.debug) {
                 console.log('Roof rotation set to match foundation');
                 console.log('Foundation rotation:', piece.rotation.y);
             }
         }
 
-        // Roof snapping to roof - match rotation like foundation to foundation
-        else if (blueprintType === 'roof' && pieceType === 'roof') {
-            // Match the existing roof's rotation
-            snapRot.y = piece.rotation.y;
-
-            if (this.debug) {
-                console.log('Roof rotation set to match existing roof');
-            }
-        }
+        // Removed roof-to-roof rotation logic
 
         // For other combinations, use the same rotation as the piece
 
@@ -827,63 +811,7 @@ export class BuildingSystem {
         }
     }
 
-    // Automatically add a roof above a foundation
-    addRoofAboveFoundation(foundation) {
-        if (!foundation || foundation.userData.buildingType !== 'foundation') {
-            if (this.debug) {
-                console.log('Cannot add roof - not a foundation');
-            }
-            return;
-        }
-
-        // Create a roof mesh
-        const geometry = this.meshes['roof'];
-        const material = new THREE.MeshStandardMaterial({
-            color: 0x8B4513,
-            roughness: 0.8,
-            metalness: 0.1
-        });
-
-        const roof = new THREE.Mesh(geometry, material);
-
-        // Get dimensions
-        const foundationSize = this.getPieceSize('foundation');
-        const wallHeight = this.getPieceSize('wall').y;
-        const roofSize = this.getPieceSize('roof');
-
-        // Position the roof directly above the foundation at wall height
-        // Adjust the height to ensure the roof sits directly on top of walls
-        roof.position.copy(foundation.position);
-
-        // Calculate the exact height:
-        // Foundation position + half foundation height (to get to top of foundation)
-        // + wall height (to get to top of wall)
-        // - half roof height (to position bottom of roof at top of wall)
-        roof.position.y = foundation.position.y + foundationSize.y/2 + wallHeight - roofSize.y/2;
-
-        // Match the foundation's rotation
-        roof.rotation.copy(foundation.rotation);
-
-        // Store the building type in userData
-        roof.userData.buildingType = 'roof';
-        roof.userData.isCollidable = true;
-
-        // Add to scene
-        this.scene.add(roof);
-
-        // Add to placed pieces for snapping and collision detection
-        this.placedPieces.push(roof);
-
-        if (this.debug) {
-            console.log('Automatically added roof above foundation');
-            console.log('Foundation position:', foundation.position);
-            console.log('Wall height:', wallHeight);
-            console.log('Roof position:', roof.position);
-            console.log('Roof sits directly on top of walls');
-        }
-
-        return roof;
-    }
+    // Removed addRoofAboveFoundation method as we're no longer automatically adding roofs
 
     // Create a window frame that's embedded in the wall
     createWindowFrame() {

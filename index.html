@@ -22,6 +22,51 @@
             font-family: Arial, sans-serif;
             display: none;
         }
+        .crafting-menu {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            border: 2px solid white;
+            padding: 20px;
+            color: white;
+            font-family: Arial, sans-serif;
+            display: none;
+            z-index: 100;
+        }
+        .crafting-menu h2 {
+            margin-top: 0;
+            text-align: center;
+            border-bottom: 1px solid white;
+            padding-bottom: 10px;
+        }
+        .crafting-items {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .crafting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px;
+            border: 1px solid #555;
+            cursor: pointer;
+        }
+        .crafting-item:hover {
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+        .crafting-item-selected {
+            background-color: rgba(100, 100, 255, 0.3);
+        }
+        .crafting-item-name {
+            font-weight: bold;
+        }
+        .crafting-item-requirements {
+            font-size: 0.8em;
+            color: #ccc;
+        }
         .inventory {
             position: fixed;
             bottom: 20px;
@@ -78,6 +123,12 @@
 <body>
     <div id="interaction-prompt" class="interaction-prompt"></div>
     <div id="crafting-prompt" class="crafting-prompt"></div>
+    <div id="crafting-menu" class="crafting-menu">
+        <h2>Crafting Menu</h2>
+        <div id="crafting-items" class="crafting-items">
+            <!-- Crafting items will be added here dynamically -->
+        </div>
+    </div>
     <div id="inventory" class="inventory">
         <div class="inventory-slot"></div>
         <div class="inventory-slot"></div>

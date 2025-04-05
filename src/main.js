@@ -1,8 +1,12 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { Inventory, Item } from './inventory.js';
 import { BuildingSystem } from './buildingSystem.js';
+import { CraftingSystem } from './craftingSystem.js';
 import { Terminal } from './terminal.js';
+import { Sky } from './Sky.js';
+import { createFireParticles, updateFireParticles, removeFireParticles } from './fireParticles.js';
 
 const savedAxePosition = localStorage.getItem('axePosition');
 const savedAxeRotation = localStorage.getItem('axeRotation');
@@ -28,13 +32,29 @@ if (savedAxeRotation) {
 let camera, scene, renderer, controls;
 let moveForward = false;
 let moveBackward = false;
+
+// Sky variables
+let sky, sun, ambientLight, directionalLight;
+
+// Model variables
+let treeModel, rockModel, logPileModel;
+const skyParams = {
+    turbidity: 8,       // Moderate turbidity for natural sky
+    rayleigh: 1.5,      // Moderate rayleigh for natural atmospheric scattering
+    mieCoefficient: 0.005, // Standard mie scattering
+    mieDirectionalG: 0.8,
+    elevation: 45,      // Standard sun position
+    azimuth: 180
+};
 let moveLeft = false;
 let moveRight = false;
 let velocity = new THREE.Vector3();
 let direction = new THREE.Vector3();
 
 let inventory;
-let interactableObjects = [];
+// Make interactableObjects globally accessible
+window.interactableObjects = [];
+let interactableObjects = window.interactableObjects;
 const INTERACT_DISTANCE = 3;
 const raycaster = new THREE.Raycaster();
 
@@ -53,6 +73,9 @@ let forceCleanupBlueprint = false;
 // Terminal
 let terminal = null;
 
+// Clock for animations
+let clock = new THREE.Clock();
+
 // Collision detection variables
 const PLAYER_HEIGHT = 1.3; // Extremely reduced height to fit in structures
 const PLAYER_RADIUS = 0.15; // Extremely reduced radius to fit through doorways
@@ -61,7 +84,7 @@ const COLLISION_THRESHOLD = 0.02; // Minimal threshold for very tight movement
 const CHOP_DISTANCE = 3;
 const CHOPS_TO_FELL = 5;
 const treeHealth = new Map();
-let buildingSystem;
+let buildingSystem, craftingSystem;
 
 // Wait for DOM to be ready
 document.addEventListener('DOMContentLoaded', () => {
@@ -129,6 +152,43 @@ function checkCollision(position, direction, distance) {
     return false;
 }
 
+// Function to update the sun position based on elevation and azimuth
+function updateSunPosition() {
+    const phi = THREE.MathUtils.degToRad(90 - skyParams.elevation);
+    const theta = THREE.MathUtils.degToRad(skyParams.azimuth);
+
+    sun.setFromSphericalCoords(1, phi, theta);
+
+    sky.material.uniforms['sunPosition'].value.copy(sun);
+
+    // Update directional light to match sun position
+    if (directionalLight) {
+        directionalLight.position.copy(sun).normalize().multiplyScalar(10);
+
+        // Adjust directional light intensity based on time of day
+        if (skyParams.elevation > 0) {
+            // Daytime - moderate directional light
+            directionalLight.intensity = 1.8;
+        } else {
+            // Nighttime - dimmer but still visible directional light
+            directionalLight.intensity = 0.7;
+        }
+    }
+
+    // Adjust ambient light based on time of day - balanced brightness
+    if (ambientLight) {
+        if (skyParams.elevation > 0) {
+            // Daytime - moderate ambient
+            ambientLight.intensity = 2.0;
+            ambientLight.color.set(0xffffff);
+        } else {
+            // Nighttime - dimmer but still visible
+            ambientLight.intensity = 1.5;
+            ambientLight.color.set(0x8080a0); // Slightly blueish night ambient light
+        }
+    }
+}
+
 // Global function to force cleanup of any lingering blueprints
 function forceCleanupAllBlueprints() {
     if (buildingSystem) {
@@ -160,7 +220,6 @@ function forceCleanupAllBlueprints() {
 function init() {
     try {
         scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87ceeb);
 
         camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         camera.position.set(0, 1.3, 0); // Extremely reduced height to match smaller player height
@@ -173,24 +232,80 @@ function init() {
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.shadowMap.enabled = true;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 0.8; // Moderate exposure for balanced brightness
         document.body.appendChild(renderer.domElement);
 
-        // Basic lighting
-        const ambientLight = new THREE.AmbientLight(0x404040, 2);
+        // Add Sky
+        sky = new Sky();
+        sky.scale.setScalar(450000);
+        scene.add(sky);
+
+        // Add Sun
+        sun = new THREE.Vector3();
+
+        // Initialize sky parameters
+        const uniforms = sky.material.uniforms;
+        uniforms['turbidity'].value = skyParams.turbidity;
+        uniforms['rayleigh'].value = skyParams.rayleigh;
+        uniforms['mieCoefficient'].value = skyParams.mieCoefficient;
+        uniforms['mieDirectionalG'].value = skyParams.mieDirectionalG;
+
+        // Update sun position
+        updateSunPosition();
+
+        // Moderate ambient light for balanced visibility
+        ambientLight = new THREE.AmbientLight(0xffffff, 2.0);
         scene.add(ambientLight);
 
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
-        directionalLight.position.set(1, 3, 2);
+        // Create directional light to match sun position - moderate intensity
+        directionalLight = new THREE.DirectionalLight(0xffffff, 1.8);
+        directionalLight.position.copy(sun).normalize().multiplyScalar(10);
         directionalLight.castShadow = true;
+
+        // Configure shadow properties
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -20;
+        directionalLight.shadow.camera.right = 20;
+        directionalLight.shadow.camera.top = 20;
+        directionalLight.shadow.camera.bottom = -20;
+
         scene.add(directionalLight);
 
-        // Ground
-        const groundGeometry = new THREE.PlaneGeometry(100, 100);
-        const groundMaterial = new THREE.MeshStandardMaterial({
-            color: 0x33aa33,
-            roughness: 0.8,
-            metalness: 0.1
+        // Ground with rocky texture - more segments for better detail
+        const groundGeometry = new THREE.PlaneGeometry(100, 100, 32, 32);
+
+        // Load rocky terrain texture
+        const textureLoader = new THREE.TextureLoader();
+        const rockyTexture = textureLoader.load('assets/textures/rocky_terrain.jpg', function(texture) {
+            // Once texture is loaded, update the renderer
+            renderer.render(scene, camera);
         });
+
+        // Set texture repeat for tiling
+        rockyTexture.wrapS = THREE.RepeatWrapping;
+        rockyTexture.wrapT = THREE.RepeatWrapping;
+        rockyTexture.repeat.set(10, 10); // Repeat the texture 10 times
+
+        // Create a normal map from the texture
+        const normalMap = textureLoader.load('assets/textures/rocky_terrain.jpg');
+        normalMap.wrapS = THREE.RepeatWrapping;
+        normalMap.wrapT = THREE.RepeatWrapping;
+        normalMap.repeat.set(10, 10);
+
+        const groundMaterial = new THREE.MeshStandardMaterial({
+            map: rockyTexture,
+            normalMap: normalMap, // Add normal mapping for depth
+            normalScale: new THREE.Vector2(0.7, 0.7), // Moderate normal effect
+            displacementScale: 0.0, // No displacement for better performance
+            roughness: 0.8, // Moderate roughness
+            metalness: 0.1, // Low metalness
+            // No emissive glow for more natural appearance
+        });
+
         const ground = new THREE.Mesh(groundGeometry, groundMaterial);
         ground.rotation.x = -Math.PI / 2;
         ground.receiveShadow = true;
@@ -218,17 +333,95 @@ function init() {
         // Initialize systems
         inventory = new Inventory();
         buildingSystem = new BuildingSystem(scene, camera, inventory);
-        setupInteractionControls(); // Add this line to initialize interaction controls
+        setupInteractionControls(); // Initialize interaction controls
+
+        // Initialize crafting system after building system
+        craftingSystem = new CraftingSystem(scene, camera, inventory, buildingSystem);
 
         // Initialize terminal
         terminal = new Terminal({
             controls: controls,
             inventory: inventory,
-            buildingSystem: buildingSystem
+            buildingSystem: buildingSystem,
+            craftingSystem: craftingSystem
         });
 
-        // Add objects
-        addEnvironmentObjects();
+        // Create a loader for all models
+        const gltfLoader = new GLTFLoader();
+        let modelsLoaded = 0;
+        const totalModels = 3; // Tree, rock, and log pile
+        // Note: The bonfire model is loaded by the CraftingSystem class
+
+        // Function to check if all models are loaded
+        const checkAllModelsLoaded = () => {
+            modelsLoaded++;
+            if (modelsLoaded === totalModels) {
+                // All models loaded, add environment objects
+                addEnvironmentObjects();
+            }
+        };
+
+        // Load tree model
+        gltfLoader.load('assets/models/tree_large.glb', function(gltf) {
+            treeModel = gltf.scene;
+
+            // Make the model cast shadows
+            treeModel.traverse(function(node) {
+                if (node.isMesh) {
+                    node.castShadow = true;
+                    node.receiveShadow = true;
+                }
+            });
+
+            checkAllModelsLoaded();
+        }, undefined, function(error) {
+            console.error('Error loading tree model:', error);
+            modelsLoaded++; // Count as loaded even if it failed
+        });
+
+        // Load rock model
+        gltfLoader.load('assets/models/rock.glb', function(gltf) {
+            rockModel = gltf.scene;
+
+            // Make the model cast shadows
+            rockModel.traverse(function(node) {
+                if (node.isMesh) {
+                    node.castShadow = true;
+                    node.receiveShadow = true;
+                }
+            });
+
+            checkAllModelsLoaded();
+        }, undefined, function(error) {
+            console.error('Error loading rock model:', error);
+            modelsLoaded++; // Count as loaded even if it failed
+        });
+
+        // Load log pile model
+        gltfLoader.load('assets/models/log_pile.glb', function(gltf) {
+            logPileModel = gltf.scene;
+
+            // Make the model cast shadows
+            logPileModel.traverse(function(node) {
+                if (node.isMesh) {
+                    node.castShadow = true;
+                    node.receiveShadow = true;
+                }
+            });
+
+            checkAllModelsLoaded();
+        }, undefined, function(error) {
+            console.error('Error loading log pile model:', error);
+            modelsLoaded++; // Count as loaded even if it failed
+        });
+
+        // If models take too long to load, add environment objects with fallbacks after a timeout
+        setTimeout(() => {
+            if (modelsLoaded < totalModels) {
+                console.warn('Some models taking too long to load, using fallbacks');
+                addEnvironmentObjects(true);
+            }
+        }, 5000); // 5 second timeout
 
         // Start animation loop
         animate();
@@ -326,9 +519,60 @@ function animate() {
 
         if (intersects.length > 0 && intersects[0].distance < INTERACT_DISTANCE) {
             const object = intersects[0].object;
-            const parentObject = object.parent.userData.type ? object.parent : object;
-            const type = parentObject.userData.type;
-            updatePrompts(`Press E to collect ${type}`);
+
+            // Find the interactable object - could be the object itself or a parent
+            let type = null;
+
+            // Check if the object itself has a type
+            if (object.userData.type) {
+                type = object.userData.type;
+            }
+            // Check if the immediate parent has a type
+            else if (object.parent && object.parent.userData.type) {
+                type = object.parent.userData.type;
+            }
+            // For the loaded model, we might need to go up multiple levels
+            else {
+                // Traverse up the parent chain to find an object with a type
+                let parent = object.parent;
+                while (parent) {
+                    if (parent.userData.type) {
+                        type = parent.userData.type;
+                        break;
+                    }
+                    parent = parent.parent;
+                }
+            }
+
+            if (type) {
+                // Special handling for bonfire
+                if (type === 'bonfire') {
+                    // Find the actual bonfire object
+                    let bonfireObject = object;
+                    if (!bonfireObject.userData.type) {
+                        // Traverse up to find the bonfire object
+                        let parent = object.parent;
+                        while (parent) {
+                            if (parent.userData.type === 'bonfire') {
+                                bonfireObject = parent;
+                                break;
+                            }
+                            parent = parent.parent;
+                        }
+                    }
+
+                    // Check if the bonfire is lit
+                    if (bonfireObject.userData.isLit) {
+                        updatePrompts('Bonfire is lit and providing warmth');
+                    } else {
+                        updatePrompts('Press E to start fire with 2 rocks and a stick');
+                    }
+                } else {
+                    updatePrompts(`Press E to collect ${type}`);
+                }
+            } else {
+                updatePrompts('');
+            }
         } else {
             updatePrompts('');
         }
@@ -401,6 +645,24 @@ function animate() {
         if (buildingSystem.isBuilding) {
             buildingSystem.updateBlueprintPosition(raycaster);
         }
+
+        // Update crafting blueprint position if crafting
+        if (craftingSystem && craftingSystem.isCrafting) {
+            // Only log occasionally to avoid console spam
+            if (Math.random() < 0.01) { // Log roughly once every 100 frames
+                console.log('Updating crafting blueprint position');
+            }
+            craftingSystem.updateBlueprintPosition(raycaster);
+        }
+
+        // Update fire particles for all lit bonfires
+        scene.traverse(object => {
+            if (object.userData.type === 'bonfire' && object.userData.isLit && object.userData.fireParticles) {
+                // Calculate delta time in seconds
+                const deltaTime = clock.getDelta();
+                updateFireParticles(object.userData.fireParticles, deltaTime);
+            }
+        });
     }
 
     // Render the scene
@@ -429,6 +691,7 @@ function setupInteractionControls() {
 function tryInteract() {
     if (!controls.isLocked) return;
 
+    // Handle building placement
     if (buildingSystem.isBuilding) {
         // Store the building type before building
         const wasWindowPlacement = buildingSystem.buildingType === 'window';
@@ -450,35 +713,110 @@ function tryInteract() {
         return;
     }
 
+    // Handle crafting placement
+    if (craftingSystem && craftingSystem.isCrafting) {
+        console.log('Detected crafting in progress, attempting to place item');
+        // Attempt to place the crafted item
+        craftingSystem.place();
+        return;
+    }
+
     raycaster.setFromCamera(new THREE.Vector2(), camera);
     const intersects = raycaster.intersectObjects(interactableObjects, true);
 
     if (intersects.length > 0 && intersects[0].distance < INTERACT_DISTANCE) {
         const object = intersects[0].object;
-        const parentObject = object.parent.userData.type ? object.parent : object;
-        const type = parentObject.userData.type;
+
+        // Find the interactable object - could be the object itself or a parent
+        let interactableObject = null;
+        let type = null;
+
+        // Check if the object itself has a type
+        if (object.userData.type) {
+            interactableObject = object;
+            type = object.userData.type;
+        }
+        // Check if the immediate parent has a type
+        else if (object.parent && object.parent.userData.type) {
+            interactableObject = object.parent;
+            type = object.parent.userData.type;
+        }
+        // For the loaded model, we might need to go up multiple levels
+        else {
+            // Traverse up the parent chain to find an object with a type
+            let parent = object.parent;
+            while (parent) {
+                if (parent.userData.type) {
+                    interactableObject = parent;
+                    type = parent.userData.type;
+                    break;
+                }
+                parent = parent.parent;
+            }
+        }
+
+        if (!interactableObject || !type) return;
 
         if (type === 'tree') {
-            inventory.addItem(new Item('stick'));
+            inventory.addItem(new Item('stick', 1));
             updatePrompts('');
         } else if (type === 'rock') {
-            inventory.addItem(new Item('rock'));
-            scene.remove(parentObject);
-            const index = interactableObjects.indexOf(parentObject);
+            inventory.addItem(new Item('rock', 1));
+            scene.remove(interactableObject);
+            const index = interactableObjects.indexOf(interactableObject);
             if (index > -1) {
                 interactableObjects.splice(index, 1);
             }
             updatePrompts('');
         } else if (type === 'logs') {
-            for (let i = 0; i < 5; i++) {
-                inventory.addItem(new Item('log'));
-            }
-            scene.remove(parentObject);
-            const index = interactableObjects.indexOf(parentObject);
+            // Add 5 logs as a single stacked item
+            console.log('Collecting log pile - adding 5 logs to inventory');
+            const beforeCount = inventory.getItemCount('log');
+
+            // Create a new Item with explicit quantity of 5
+            const logItem = new Item('log', 5);
+            console.log('Created log item with quantity:', logItem.quantity);
+
+            // Add the item to inventory
+            const added = inventory.addItem(logItem);
+            console.log('Item added to inventory:', added);
+
+            const afterCount = inventory.getItemCount('log');
+            console.log(`Log count before: ${beforeCount}, after: ${afterCount}, added: ${afterCount - beforeCount}`);
+
+            scene.remove(interactableObject);
+            const index = interactableObjects.indexOf(interactableObject);
             if (index > -1) {
                 interactableObjects.splice(index, 1);
             }
             updatePrompts('');
+        } else if (type === 'bonfire') {
+            // Handle bonfire interaction
+            if (!interactableObject.userData.isLit) {
+                // Check if player has required items (2 rocks and a stick)
+                if (inventory.getItemCount('rock') >= 2 && inventory.getItemCount('stick') >= 1) {
+                    console.log('Lighting bonfire');
+
+                    // Consume resources
+                    inventory.removeItem('rock', 2);
+                    inventory.removeItem('stick', 1);
+
+                    // Light the bonfire
+                    interactableObject.userData.isLit = true;
+
+                    // Create fire particles
+                    createFireParticles(interactableObject);
+
+                    updatePrompts('Bonfire lit!');
+                    setTimeout(() => updatePrompts(''), 2000); // Clear message after 2 seconds
+                } else {
+                    updatePrompts('Not enough materials to light the fire');
+                    setTimeout(() => updatePrompts(''), 2000); // Clear message after 2 seconds
+                }
+            } else {
+                updatePrompts('The bonfire is already lit');
+                setTimeout(() => updatePrompts(''), 2000); // Clear message after 2 seconds
+            }
         }
     }
 }
@@ -487,7 +825,7 @@ function tryCraft() {
     if (inventory.hasItems(['stick', 'rock'])) {
         inventory.removeItem('stick');
         inventory.removeItem('rock');
-        inventory.addItem(new Item('axe'));
+        inventory.addItem(new Item('axe', 1));
         updatePrompts('');
 
         if (!axeMesh) {
@@ -550,33 +888,58 @@ function createWoodChips() {
 }
 
 function createLogPile(position) {
-    const logs = new THREE.Group();
-    logs.userData.type = 'logs';
+    console.log('Creating log pile at position:', position);
+    let logs;
 
-    for (let i = 0; i < 3; i++) {
-        const logGeometry = new THREE.CylinderGeometry(0.2, 0.2, 2, 8);
-        const logMaterial = new THREE.MeshStandardMaterial({
-            color: 0x8B4513,
-            roughness: 0.8,
-            metalness: 0.1
-        });
-        const log = new THREE.Mesh(logGeometry, logMaterial);
+    if (logPileModel) {
+        console.log('Using loaded log pile model');
+        // Use the loaded log pile model
+        logs = logPileModel.clone();
 
-        log.position.set(
-            (Math.random() - 0.5) * 0.3,
-            0.2 + i * 0.4,
-            (Math.random() - 0.5) * 0.3
-        );
-        log.rotation.set(
-            (Math.random() - 0.5) * 0.3,
-            (Math.random() - 0.5) * Math.PI,
-            Math.PI / 2
-        );
+        // Scale the log pile appropriately
+        const scale = 2.0; // Scale set to 2.0 as requested
+        logs.scale.set(scale, scale, scale);
+        console.log('Set log pile scale to:', scale);
 
-        logs.add(log);
+        // Keep logs consistently oriented
+        logs.rotation.y = 0; // No random rotation
+    } else {
+        console.log('Using fallback procedural log pile');
+        // Fallback to procedural log pile if model isn't loaded
+        logs = new THREE.Group();
+
+        for (let i = 0; i < 3; i++) {
+            const logGeometry = new THREE.CylinderGeometry(0.2, 0.2, 2, 8);
+            const logMaterial = new THREE.MeshStandardMaterial({
+                color: 0x8B4513,
+                roughness: 0.8,
+                metalness: 0.1
+            });
+            const log = new THREE.Mesh(logGeometry, logMaterial);
+
+            log.position.set(
+                (Math.random() - 0.5) * 0.3,
+                0.2 + i * 0.4,
+                (Math.random() - 0.5) * 0.3
+            );
+            log.rotation.set(
+                (Math.random() - 0.5) * 0.3,
+                (Math.random() - 0.5) * Math.PI,
+                Math.PI / 2
+            );
+
+            logs.add(log);
+        }
     }
 
-    logs.position.set(position.x, 0, position.z);
+    // Set the type for interaction
+    logs.userData.type = 'logs';
+    console.log('Set log pile type to "logs" for interaction');
+
+    // Position at the tree's location, slightly raised to prevent sinking
+    logs.position.set(position.x, 0.3, position.z);
+    console.log('Positioned log pile at:', logs.position);
+
     return logs;
 }
 
@@ -593,7 +956,30 @@ function tryChopTree() {
 
     if (intersects.length > 0 && intersects[0].distance < CHOP_DISTANCE) {
         const object = intersects[0].object;
-        const tree = object.parent.userData.type === 'tree' ? object.parent : null;
+
+        // Find the tree object - could be the object itself or a parent
+        let tree = null;
+
+        // Check if the object itself is a tree
+        if (object.userData.type === 'tree') {
+            tree = object;
+        }
+        // Check if the parent is a tree
+        else if (object.parent && object.parent.userData.type === 'tree') {
+            tree = object.parent;
+        }
+        // For the loaded model, we might need to go up multiple levels
+        else {
+            // Traverse up the parent chain to find a tree
+            let parent = object.parent;
+            while (parent) {
+                if (parent.userData.type === 'tree') {
+                    tree = parent;
+                    break;
+                }
+                parent = parent.parent;
+            }
+        }
 
         if (tree) {
             const particles = createWoodChips();
@@ -606,9 +992,11 @@ function tryChopTree() {
             treeHealth.set(tree, newHealth);
 
             if (newHealth >= CHOPS_TO_FELL) {
+                console.log('Tree felled, creating log pile');
                 const logPile = createLogPile(tree.position);
                 scene.add(logPile);
                 interactableObjects.push(logPile);
+                console.log('Log pile created and added to scene');
 
                 const index = interactableObjects.indexOf(tree);
                 if (index > -1) {
@@ -632,33 +1020,50 @@ function updatePrompts(message) {
     craftingPrompt.style.display = canCraftAxe ? 'block' : 'none';
 }
 
-function addEnvironmentObjects() {
+function addEnvironmentObjects(useFallbackTrees = false) {
     for (let i = 0; i < 10; i++) {
-        const trunkGeometry = new THREE.CylinderGeometry(0.5, 0.7, 5);
-        const trunkMaterial = new THREE.MeshStandardMaterial({
-            color: 0x4d2926,
-            roughness: 0.8,
-            metalness: 0.1
-        });
-        const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
-        trunk.castShadow = true;
+        let tree;
 
-        const foliageGeometry = new THREE.ConeGeometry(2, 4, 8);
-        const foliageMaterial = new THREE.MeshStandardMaterial({
-            color: 0x2d5a27,
-            roughness: 0.8,
-            metalness: 0.1
-        });
-        const foliage = new THREE.Mesh(foliageGeometry, foliageMaterial);
-        foliage.position.y = 3;
-        foliage.castShadow = true;
+        if (treeModel && !useFallbackTrees) {
+            // Use the loaded tree model
+            tree = treeModel.clone();
 
-        const tree = new THREE.Group();
-        tree.add(trunk);
-        tree.add(foliage);
+            // Scale the tree appropriately
+            const scale = 3.5 + Math.random() * 3.5; // Random scale between 3.5 and 7.0
+            tree.scale.set(scale, scale, scale);
+
+            // Rotate slightly for variety
+            tree.rotation.y = Math.random() * Math.PI * 2;
+        } else {
+            // Fallback to procedural tree if model isn't loaded
+            const trunkGeometry = new THREE.CylinderGeometry(0.5, 0.7, 5);
+            const trunkMaterial = new THREE.MeshStandardMaterial({
+                color: 0x4d2926,
+                roughness: 0.8,
+                metalness: 0.1
+            });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.castShadow = true;
+
+            const foliageGeometry = new THREE.ConeGeometry(2, 4, 8);
+            const foliageMaterial = new THREE.MeshStandardMaterial({
+                color: 0x2d5a27,
+                roughness: 0.8,
+                metalness: 0.1
+            });
+            const foliage = new THREE.Mesh(foliageGeometry, foliageMaterial);
+            foliage.position.y = 3;
+            foliage.castShadow = true;
+
+            tree = new THREE.Group();
+            tree.add(trunk);
+            tree.add(foliage);
+        }
+
+        // Position the tree
         tree.position.set(
             Math.random() * 40 - 20,
-            2.5,
+            0, // Position at ground level, the model has its own height
             Math.random() * 40 - 20
         );
         tree.userData.type = 'tree';
@@ -666,30 +1071,58 @@ function addEnvironmentObjects() {
         interactableObjects.push(tree);
     }
 
-    for (let i = 0; i < 5; i++) {
-        const rockGeometry = new THREE.DodecahedronGeometry(0.5);
-        const vertices = rockGeometry.attributes.position.array;
-        for (let j = 0; j < vertices.length; j += 3) {
-            vertices[j] *= 0.8 + Math.random() * 0.4;
-            vertices[j + 1] *= 0.8 + Math.random() * 0.4;
-            vertices[j + 2] *= 0.8 + Math.random() * 0.4;
+    for (let i = 0; i < 15; i++) { // Increased number of rocks to better fill the grid
+        let rock;
+
+        if (rockModel && !useFallbackTrees) { // If rock model is loaded and we're not using fallbacks
+            // Use the loaded rock model
+            rock = rockModel.clone();
+
+            // Scale the rock to be very small with minimal randomness
+            const scale = 0.005 + Math.random() * 0.002; // Random scale between 0.005 and 0.007
+            rock.scale.set(scale, scale, scale);
+
+            // Rotate for variety
+            rock.rotation.set(
+                Math.random() * Math.PI,
+                Math.random() * Math.PI * 2,
+                Math.random() * Math.PI
+            );
+        } else {
+            // Fallback to procedural rock if model isn't loaded
+            const rockGeometry = new THREE.DodecahedronGeometry(0.5);
+            const vertices = rockGeometry.attributes.position.array;
+            for (let j = 0; j < vertices.length; j += 3) {
+                vertices[j] *= 0.8 + Math.random() * 0.4;
+                vertices[j + 1] *= 0.8 + Math.random() * 0.4;
+                vertices[j + 2] *= 0.8 + Math.random() * 0.4;
+            }
+            const rockMaterial = new THREE.MeshStandardMaterial({
+                color: 0x808080,
+                roughness: 0.9,
+                metalness: 0.1
+            });
+            rock = new THREE.Mesh(rockGeometry, rockMaterial);
+            rock.rotation.set(
+                Math.random() * Math.PI,
+                Math.random() * Math.PI,
+                Math.random() * Math.PI
+            );
         }
-        const rockMaterial = new THREE.MeshStandardMaterial({
-            color: 0x808080,
-            roughness: 0.9,
-            metalness: 0.1
-        });
-        const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+
+        // Position the rock with more consistent spacing
+        // Create a grid-like distribution with slight randomness
+        const gridSize = 10; // Size of the grid
+        const cellSize = 40 / gridSize; // Size of each cell
+        const gridX = i % gridSize;
+        const gridZ = Math.floor(i / gridSize);
+
         rock.position.set(
-            Math.random() * 40 - 20,
-            0.5,
-            Math.random() * 40 - 20
+            -20 + gridX * cellSize + Math.random() * (cellSize * 0.5),
+            0, // Position at ground level, the model has its own height
+            -20 + gridZ * cellSize + Math.random() * (cellSize * 0.5)
         );
-        rock.rotation.set(
-            Math.random() * Math.PI,
-            Math.random() * Math.PI,
-            Math.random() * Math.PI
-        );
+
         rock.userData.type = 'rock';
         rock.castShadow = true;
         scene.add(rock);
@@ -782,6 +1215,18 @@ function onKeyDown(event) {
         }
     }
 
+    // Handle crafting menu toggle with I key
+    if (event.code === 'KeyI') {
+        if (craftingSystem) {
+            console.log('Toggling crafting menu via I key');
+            craftingSystem.toggleMenu();
+            event.preventDefault();
+            return;
+        } else {
+            console.warn('Crafting system not initialized yet');
+        }
+    }
+
     // Don't process other keys when terminal is open
     if (terminal && terminal.isOpen) {
         return;
@@ -833,10 +1278,40 @@ function onKeyDown(event) {
             forceCleanupBlueprint = true;
             console.log('ESCAPE KEY: Setting force cleanup flag');
 
-            // Also try the normal cancellation
+            // Try the normal cancellation for building
             if (buildingSystem.isBuilding) {
                 buildingSystem.cancelBuilding();
             }
+
+            // Cancel crafting placement if active
+            if (craftingSystem && craftingSystem.isCrafting) {
+                console.log('Cancelling crafting placement via Escape key');
+                craftingSystem.cancelPlacement();
+            }
+            break;
+
+        case 'KeyT':
+            // Cycle through times of day - balanced lighting
+            if (skyParams.elevation > 30) {
+                // Switch to sunset
+                skyParams.elevation = 10;
+                skyParams.turbidity = 10;
+                skyParams.rayleigh = 2;
+                console.log('Time of day: Sunset');
+            } else if (skyParams.elevation > 0) {
+                // Switch to night
+                skyParams.elevation = -10;
+                skyParams.turbidity = 6;
+                skyParams.rayleigh = 1;
+                console.log('Time of day: Night');
+            } else {
+                // Switch to day
+                skyParams.elevation = 45;
+                skyParams.turbidity = 8;
+                skyParams.rayleigh = 1.5;
+                console.log('Time of day: Day');
+            }
+            updateSunPosition();
             break;
     }
 }
