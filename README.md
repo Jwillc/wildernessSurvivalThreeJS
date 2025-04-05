@@ -2,8 +2,6 @@
 
 A first-person survival game built with Three.js where players must gather resources, craft items, and build structures to survive in a procedurally generated wilderness.
 
-![Wilderness Survival Game](screenshots/game_preview.png)
-
 ## Overview
 
 Wilderness Survival is a browser-based 3D survival game that challenges players to survive in a procedurally generated environment. Players can gather resources, craft items, and build structures to help them survive.
@@ -140,6 +138,6 @@ The building system is implemented in `src/buildingSystem.js` and includes:
 
 ## Credits
 
-Created by [Your Name]
+Created by AI
 
 Three.js - https://threejs.org/

@@ -39,6 +39,11 @@ let axeMesh = null;
 let editorMode = false;
 let spacePressed = false;
 
+// Axe animation variables
+let axeAnimating = false;
+let axeAnimationStartTime = 0;
+let axeAnimationDuration = 500; // milliseconds
+
 const CHOP_DISTANCE = 3;
 const CHOPS_TO_FELL = 5;
 const treeHealth = new Map();
@@ -149,10 +154,51 @@ function animate() {
             updatePrompts('');
         }
 
-        if (axeMesh && spacePressed) {
-            axeMesh.rotation.x = axeRotation.x + Math.sin(Date.now() * 0.01) * 0.5;
-        } else if (axeMesh && !editorMode) {
-            axeMesh.rotation.copy(axeRotation);
+        // Handle axe animation
+        if (axeMesh && !editorMode) {
+            if (axeAnimating) {
+                // Calculate animation progress (0 to 1)
+                const elapsed = Date.now() - axeAnimationStartTime;
+                const progress = Math.min(elapsed / axeAnimationDuration, 1);
+
+                if (progress < 0.5) {
+                    // Forward swing (0 to 0.5 progress) - CORRECTED DIRECTION
+                    // Map 0-0.5 to 0-1 for the forward swing
+                    const forwardProgress = progress * 2;
+                    // Use easeOutQuad for natural deceleration at the end of the swing
+                    const eased = 1 - Math.pow(1 - forwardProgress, 2);
+                    // Apply rotation: start at axeRotation.x, swing DOWNWARD by 0.8 radians
+                    // Negative value makes it swing forward/down in a chopping motion
+                    axeMesh.rotation.x = axeRotation.x - eased * 0.8;
+                } else {
+                    // Return swing (0.5 to 1 progress)
+                    // Map 0.5-1 to 0-1 for the return swing
+                    const returnProgress = (progress - 0.5) * 2;
+                    // Use easeInOutQuad for smooth return
+                    const eased = returnProgress < 0.5 ? 2 * returnProgress * returnProgress : 1 - Math.pow(-2 * returnProgress + 2, 2) / 2;
+                    // Apply rotation: start at max forward position, return to original position
+                    // Return from the downward position back to original
+                    axeMesh.rotation.x = axeRotation.x - 0.8 + eased * 0.8;
+                }
+
+                // Animation complete
+                if (progress >= 1) {
+                    axeAnimating = false;
+                    axeMesh.rotation.copy(axeRotation);
+
+                    // If space is still pressed, start a new animation
+                    if (spacePressed) {
+                        startAxeAnimation();
+                        tryChopTree();
+                    }
+                }
+            } else if (spacePressed && !axeAnimating) {
+                // Start a new animation if space is pressed and no animation is running
+                startAxeAnimation();
+            } else {
+                // Reset to default position when not animating
+                axeMesh.rotation.copy(axeRotation);
+            }
         }
 
         scene.children.forEach(child => {
@@ -337,6 +383,11 @@ function createLogPile(position) {
 
     logs.position.set(position.x, 0, position.z);
     return logs;
+}
+
+function startAxeAnimation() {
+    axeAnimating = true;
+    axeAnimationStartTime = Date.now();
 }
 
 function tryChopTree() {
@@ -538,7 +589,11 @@ function onKeyDown(event) {
         case 'Space':
             if (inventory.hasItems(['axe'])) {
                 spacePressed = true;
-                tryChopTree();
+                // Only start animation and try chopping if not already animating
+                if (!axeAnimating) {
+                    startAxeAnimation();
+                    tryChopTree();
+                }
             }
             break;
         case 'KeyB':
