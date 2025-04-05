@@ -12,14 +12,16 @@ if (savedAxePosition) {
     const pos = JSON.parse(savedAxePosition);
     axePosition = new THREE.Vector3(pos[0], pos[1], pos[2]);
 } else {
-    axePosition = new THREE.Vector3(0.7, -0.5, -1);
+    // Use the position you adjusted in the editor as the default
+    axePosition = new THREE.Vector3(0.5, -0.3, -0.7);
 }
 
 if (savedAxeRotation) {
     const rot = JSON.parse(savedAxeRotation);
     axeRotation = new THREE.Euler(rot[0], rot[1], rot[2]);
 } else {
-    axeRotation = new THREE.Euler(Math.PI / 4, -Math.PI / 6, 0);
+    // Use the rotation you adjusted in the editor as the default
+    axeRotation = new THREE.Euler(0.2, -0.3, 0.1);
 }
 
 let camera, scene, renderer, controls;
@@ -44,6 +46,14 @@ let axeAnimating = false;
 let axeAnimationStartTime = 0;
 let axeAnimationDuration = 500; // milliseconds
 
+// Global flag to force blueprint cleanup
+let forceCleanupBlueprint = false;
+
+// Collision detection variables
+const PLAYER_HEIGHT = 1.8;
+const PLAYER_RADIUS = 0.3;
+const COLLISION_THRESHOLD = 0.1; // Minimum distance to obstacles
+
 const CHOP_DISTANCE = 3;
 const CHOPS_TO_FELL = 5;
 const treeHealth = new Map();
@@ -51,8 +61,90 @@ let buildingSystem;
 
 // Wait for DOM to be ready
 document.addEventListener('DOMContentLoaded', () => {
+    // Make resetAxePosition available globally for debugging
+    window.resetAxePosition = resetAxePosition;
+
     init();
 });
+
+// Check if a movement would cause a collision with building pieces
+function checkCollision(position, direction, distance) {
+    // Get all building pieces to check for collisions
+    const collidableObjects = [];
+
+    // Add all placed building pieces from the building system
+    if (buildingSystem && buildingSystem.placedPieces) {
+        collidableObjects.push(...buildingSystem.placedPieces);
+    }
+
+    // If there are no collidable objects, no collision
+    if (collidableObjects.length === 0) return false;
+
+    // Normalize direction
+    const rayDirection = direction.clone().normalize();
+
+    // Cast multiple rays to simulate a capsule (player body)
+    // We'll cast rays at foot level, waist level, and head level
+    const rayOrigins = [
+        position.clone(), // Foot level
+        position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT / 2, 0)), // Waist level
+        position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT - 0.2, 0)) // Head level
+    ];
+
+    // Also cast rays from the sides to simulate the player's width
+    const sideOffset = PLAYER_RADIUS * 0.8; // Slightly less than full radius for better gameplay
+
+    // Calculate perpendicular vector to movement direction (on xz plane)
+    const perpVector = new THREE.Vector3(-rayDirection.z, 0, rayDirection.x).normalize();
+
+    // Add side rays at waist level
+    rayOrigins.push(
+        position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT / 2, 0)).add(perpVector.clone().multiplyScalar(sideOffset)),
+        position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT / 2, 0)).add(perpVector.clone().multiplyScalar(-sideOffset))
+    );
+
+    // Check each ray for collision
+    for (const origin of rayOrigins) {
+        const raycaster = new THREE.Raycaster(origin, rayDirection);
+        const intersects = raycaster.intersectObjects(collidableObjects, true);
+
+        // If there's an intersection closer than our movement distance plus threshold, we have a collision
+        if (intersects.length > 0 && intersects[0].distance < distance + COLLISION_THRESHOLD) {
+            return true;
+        }
+    }
+
+    // No collision detected with any ray
+    return false;
+}
+
+// Global function to force cleanup of any lingering blueprints
+function forceCleanupAllBlueprints() {
+    if (buildingSystem) {
+        console.log('FORCE CLEANUP: Removing all blueprints');
+
+        // First try the normal cancellation
+        buildingSystem.cancelBuilding();
+
+        // If that didn't work, try more aggressive cleanup
+        if (buildingSystem.currentBlueprint) {
+            console.error('FORCE CLEANUP: Blueprint still exists, using direct scene removal');
+
+            // Try direct scene removal
+            scene.remove(buildingSystem.currentBlueprint);
+
+            // Reset all building system state
+            buildingSystem.currentBlueprint = null;
+            buildingSystem.isBuilding = false;
+            buildingSystem.buildingType = null;
+            buildingSystem.wallRotationIndex = 0;
+            buildingSystem.hideBuildingInstructions();
+        }
+
+        // Set the global flag to false
+        forceCleanupBlueprint = false;
+    }
+}
 
 function init() {
     try {
@@ -103,6 +195,15 @@ function init() {
         document.addEventListener('keydown', onKeyDown);
         document.addEventListener('keyup', onKeyUp);
 
+        // Add global key handler for Escape key
+        document.addEventListener('keydown', (event) => {
+            if (event.code === 'Escape') {
+                // Set the force cleanup flag
+                forceCleanupBlueprint = true;
+                console.log('GLOBAL ESCAPE: Setting force cleanup flag');
+            }
+        });
+
         // Initialize systems
         inventory = new Inventory();
         buildingSystem = new BuildingSystem(scene, camera, inventory);
@@ -123,6 +224,34 @@ function init() {
 function animate() {
     requestAnimationFrame(animate);
 
+    // Check if building system is active but should be reset
+    if (buildingSystem) {
+        // Check if force cleanup flag is set
+        if (forceCleanupBlueprint) {
+            forceCleanupAllBlueprints();
+        }
+
+        // Force cleanup of any lingering blueprints
+        if (!buildingSystem.isBuilding && buildingSystem.currentBlueprint) {
+            console.error('Blueprint still exists but building mode is inactive, forcing cleanup');
+            forceCleanupAllBlueprints();
+        }
+
+        // Check for window blueprints specifically
+        if (buildingSystem.currentBlueprint && buildingSystem.buildingType === 'window') {
+            // Check if the blueprint has been in the scene for too long
+            if (!buildingSystem.blueprintCreationTime) {
+                buildingSystem.blueprintCreationTime = Date.now();
+            } else if (Date.now() - buildingSystem.blueprintCreationTime > 10000) { // 10 seconds timeout (reduced from 30)
+                console.error('Window blueprint has been active for too long, forcing cleanup');
+                forceCleanupAllBlueprints();
+                buildingSystem.blueprintCreationTime = null;
+            }
+        } else {
+            buildingSystem.blueprintCreationTime = null;
+        }
+    }
+
     if (controls.isLocked) {
         velocity.x = 0;
         velocity.z = 0;
@@ -132,15 +261,47 @@ function animate() {
         direction.normalize();
 
         const speed = 0.1;
+        let newVelocity = new THREE.Vector3(0, 0, 0);
+
+        // Calculate desired velocity
         if (moveForward || moveBackward) {
-            velocity.z = direction.z * speed;
+            newVelocity.z = direction.z * speed;
         }
         if (moveLeft || moveRight) {
-            velocity.x = direction.x * speed;
+            newVelocity.x = direction.x * speed;
         }
 
-        controls.moveRight(-velocity.x);
-        controls.moveForward(-velocity.z);
+        // Check for collisions in X and Z directions separately
+        const currentPosition = camera.position.clone();
+
+        // Create movement vectors for collision checking
+        const forwardVector = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        forwardVector.y = 0; // Keep movement on the xz plane
+        forwardVector.normalize();
+
+        const rightVector = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+        rightVector.y = 0; // Keep movement on the xz plane
+        rightVector.normalize();
+
+        // Check forward/backward movement collision
+        if (newVelocity.z !== 0) {
+            const movementDirection = forwardVector.clone().multiplyScalar(Math.sign(-newVelocity.z));
+            if (checkCollision(currentPosition, movementDirection, Math.abs(newVelocity.z))) {
+                newVelocity.z = 0; // Cancel movement if collision detected
+            }
+        }
+
+        // Check left/right movement collision
+        if (newVelocity.x !== 0) {
+            const movementDirection = rightVector.clone().multiplyScalar(Math.sign(-newVelocity.x));
+            if (checkCollision(currentPosition, movementDirection, Math.abs(newVelocity.x))) {
+                newVelocity.x = 0; // Cancel movement if collision detected
+            }
+        }
+
+        // Apply the collision-checked velocity
+        controls.moveRight(-newVelocity.x);
+        controls.moveForward(-newVelocity.z);
 
         raycaster.setFromCamera(new THREE.Vector2(), camera);
         const intersects = raycaster.intersectObjects(interactableObjects, true);
@@ -251,7 +412,23 @@ function tryInteract() {
     if (!controls.isLocked) return;
 
     if (buildingSystem.isBuilding) {
+        // Store the building type before building
+        const wasWindowPlacement = buildingSystem.buildingType === 'window';
+
+        // Attempt to build
         buildingSystem.build();
+
+        // Extra check for window placement
+        if (wasWindowPlacement) {
+            // Force cleanup of any lingering window blueprint
+            setTimeout(() => {
+                if (buildingSystem.currentBlueprint) {
+                    console.error('Window blueprint still exists after building, forcing cleanup');
+                    buildingSystem.cancelBuilding();
+                }
+            }, 100); // Small delay to ensure the build process has completed
+        }
+
         return;
     }
 
@@ -502,6 +679,13 @@ function addEnvironmentObjects() {
     }
 }
 
+// Function to reset axe position to default (can be called from console for testing)
+function resetAxePosition() {
+    localStorage.removeItem('axePosition');
+    localStorage.removeItem('axeRotation');
+    console.log('Axe position and rotation reset to default. Refresh the page to apply.');
+}
+
 function setupEditorControls() {
     const MOVE_SPEED = 0.01;
     const ROTATE_SPEED = 0.01;
@@ -597,11 +781,22 @@ function onKeyDown(event) {
             }
             break;
         case 'KeyB':
+            // Force cleanup any lingering blueprints before showing the building menu
+            if (buildingSystem.currentBlueprint) {
+                console.log('B KEY: Cleaning up lingering blueprint before showing menu');
+                forceCleanupAllBlueprints();
+            }
+
             if (!buildingSystem.isBuilding) {
                 buildingSystem.showBuildingMenu();
             }
             break;
         case 'Escape':
+            // Set the force cleanup flag
+            forceCleanupBlueprint = true;
+            console.log('ESCAPE KEY: Setting force cleanup flag');
+
+            // Also try the normal cancellation
             if (buildingSystem.isBuilding) {
                 buildingSystem.cancelBuilding();
             }

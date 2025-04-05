@@ -60,7 +60,7 @@ export class BuildingSystem {
         this.isSnapping = false; // Whether currently snapping to another piece
 
         // Debug flag
-        this.debug = true;
+        this.debug = true; // Enable debug logging
     }
 
     showBuildingMenu() {
@@ -348,6 +348,9 @@ export class BuildingSystem {
     build() {
         if (!this.isBuilding || !this.currentBlueprint) return;
 
+        // Store a reference to the blueprint for removal later
+        const blueprintToRemove = this.currentBlueprint;
+
         // Special handling for windows
         if (this.buildingType === 'window') {
             // Check if we have a target wall
@@ -372,6 +375,12 @@ export class BuildingSystem {
             // Add window to scene
             this.scene.add(windowFrame);
 
+            // Add collision detection properties
+            windowFrame.userData.isCollidable = true;
+
+            // Add window frame to placed pieces for potential future snapping and collision detection
+            this.placedPieces.push(windowFrame);
+
             // Update the target wall reference
             targetWall = updatedWall;
 
@@ -386,12 +395,25 @@ export class BuildingSystem {
 
             if (this.debug) {
                 console.log('Window placed on wall:', targetWall);
+                console.log(`Added window to placed pieces. Total pieces: ${this.placedPieces.length}`);
             }
 
             // Remove logs from inventory
             for (let i = 0; i < this.costs[this.buildingType]; i++) {
                 this.inventory.removeItem('log');
             }
+
+            // CRITICAL FIX: Explicitly remove the blueprint and reset building state
+            console.log('Explicitly removing window blueprint');
+            this.scene.remove(blueprintToRemove);
+            this.currentBlueprint = null;
+            this.isBuilding = false;
+            this.buildingType = null;
+            this.wallRotationIndex = 0;
+            this.hideBuildingInstructions();
+
+            // Return early to prevent the normal blueprint removal code from running
+            return;
         } else {
             // Normal building piece (wall, foundation, roof)
             const geometry = this.meshes[this.buildingType];
@@ -426,7 +448,10 @@ export class BuildingSystem {
             // Add to scene
             this.scene.add(buildingPiece);
 
-            // Add to placed pieces for snapping
+            // Add collision detection properties
+            buildingPiece.userData.isCollidable = true;
+
+            // Add to placed pieces for snapping and collision detection
             this.placedPieces.push(buildingPiece);
 
             if (this.debug) {
@@ -441,7 +466,19 @@ export class BuildingSystem {
         }
 
         // Remove blueprint
-        this.scene.remove(this.currentBlueprint);
+        if (this.debug) {
+            console.log('Removing blueprint from scene');
+        }
+
+        // Use the stored reference to ensure we remove the correct blueprint
+        this.scene.remove(blueprintToRemove);
+
+        // Force a null check to ensure the blueprint is removed
+        if (this.scene.getObjectById(blueprintToRemove.id)) {
+            console.error('Blueprint still in scene after removal attempt, forcing removal');
+            this.scene.remove(blueprintToRemove);
+        }
+
         this.currentBlueprint = null;
 
         this.isBuilding = false;
@@ -454,7 +491,18 @@ export class BuildingSystem {
 
     cancelBuilding() {
         if (this.currentBlueprint) {
-            this.scene.remove(this.currentBlueprint);
+            // Store a reference to the blueprint
+            const blueprintToRemove = this.currentBlueprint;
+
+            // Remove the blueprint from the scene
+            this.scene.remove(blueprintToRemove);
+
+            // Force a null check to ensure the blueprint is removed
+            if (this.scene.getObjectById(blueprintToRemove.id)) {
+                console.error('Blueprint still in scene after cancellation, forcing removal');
+                this.scene.remove(blueprintToRemove);
+            }
+
             this.currentBlueprint = null;
         }
         this.isBuilding = false;
@@ -801,6 +849,7 @@ export class BuildingSystem {
         wallGroup.position.copy(originalPosition);
         wallGroup.rotation.copy(originalRotation);
         wallGroup.userData = originalUserData;
+        wallGroup.userData.isCollidable = true;
 
         // Calculate the local position of the window on the wall
         const localWindowPos = windowPosition.clone().sub(originalPosition);
@@ -823,6 +872,8 @@ export class BuildingSystem {
             const topGeometry = new THREE.BoxGeometry(wallSize.x, topHeight, wallSize.z);
             const topWall = new THREE.Mesh(topGeometry, wallMaterial);
             topWall.position.set(0, wallSize.y/2 - topHeight/2, 0);
+            topWall.userData.isCollidable = true;
+            topWall.userData.buildingType = 'wall';
             wallGroup.add(topWall);
         }
 
@@ -832,6 +883,8 @@ export class BuildingSystem {
             const bottomGeometry = new THREE.BoxGeometry(wallSize.x, bottomHeight, wallSize.z);
             const bottomWall = new THREE.Mesh(bottomGeometry, wallMaterial);
             bottomWall.position.set(0, -wallSize.y/2 + bottomHeight/2, 0);
+            bottomWall.userData.isCollidable = true;
+            bottomWall.userData.buildingType = 'wall';
             wallGroup.add(bottomWall);
         }
 
@@ -841,6 +894,8 @@ export class BuildingSystem {
             const leftGeometry = new THREE.BoxGeometry(leftWidth, wallSize.y, wallSize.z);
             const leftWall = new THREE.Mesh(leftGeometry, wallMaterial);
             leftWall.position.set(-wallSize.x/2 + leftWidth/2, 0, 0);
+            leftWall.userData.isCollidable = true;
+            leftWall.userData.buildingType = 'wall';
             wallGroup.add(leftWall);
         }
 
@@ -850,6 +905,8 @@ export class BuildingSystem {
             const rightGeometry = new THREE.BoxGeometry(rightWidth, wallSize.y, wallSize.z);
             const rightWall = new THREE.Mesh(rightGeometry, wallMaterial);
             rightWall.position.set(wallSize.x/2 - rightWidth/2, 0, 0);
+            rightWall.userData.isCollidable = true;
+            rightWall.userData.buildingType = 'wall';
             wallGroup.add(rightWall);
         }
 

@@ -1,5 +1,7 @@
 # Wilderness Survival
 
+(This README is AI generated and not entirely accurate)
+
 A first-person survival game built with Three.js where players must gather resources, craft items, and build structures to survive in a procedurally generated wilderness.
 
 ## Overview
@@ -65,7 +67,7 @@ The game features a robust building system that allows players to construct stru
 
 1. Clone the repository:
 ```
-git clone https://github.com/yourusername/wilderness-survival.git
+git clone https://github.com/Jwillc/wildernessSurvivalThreeJS
 ```
 
 2. Navigate to the project directory:
