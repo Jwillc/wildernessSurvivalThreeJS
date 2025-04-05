@@ -1,3 +1,27 @@
+# Testing
+
+First craft an axe
+- Walk up to a tree
+- Press E to collect stick from tree
+- Walk up to a rock
+- Press E to pick it up
+- Press C to craft axe
+
+Open in game terminal
+- Press ` to open terminal
+- Type "Unlimited Logs" to enable unlimited logs
+
+Build a structure
+- Press B to enter building mode
+- Press 1-5 to select building type (1: Wall, 2: Foundation, 3: Roof, 4: Window, 5: Door)
+- Place foundations first (rooves are automatically added above foundations for now)
+- Place walls on foundations
+- Place windows on walls
+- Place doors on walls
+- Doors cannot be passed through at the moment
+
+Thats it! That's all there is to do for now.
+
 # Wilderness Survival
 
 (This README is AI generated and not entirely accurate)
