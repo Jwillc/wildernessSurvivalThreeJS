@@ -54,9 +54,9 @@ let forceCleanupBlueprint = false;
 let terminal = null;
 
 // Collision detection variables
-const PLAYER_HEIGHT = 1.4; // Further reduced height to fit in structures
-const PLAYER_RADIUS = 0.2; // Further reduced radius to fit through doorways
-const COLLISION_THRESHOLD = 0.03; // Minimal threshold for very tight movement
+const PLAYER_HEIGHT = 1.3; // Extremely reduced height to fit in structures
+const PLAYER_RADIUS = 0.15; // Extremely reduced radius to fit through doorways
+const COLLISION_THRESHOLD = 0.02; // Minimal threshold for very tight movement
 
 const CHOP_DISTANCE = 3;
 const CHOPS_TO_FELL = 5;
@@ -87,15 +87,15 @@ function checkCollision(position, direction, distance) {
     // Normalize direction
     const rayDirection = direction.clone().normalize();
 
-    // Cast minimal rays to simulate a very small player capsule
+    // Cast minimal rays to simulate an extremely small player capsule
     // Using only two rays for better fit in tight structures
     const rayOrigins = [
-        position.clone().add(new THREE.Vector3(0, 0.2, 0)), // Above foot level
-        position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT - 0.4, 0)) // Well below head level
+        position.clone().add(new THREE.Vector3(0, 0.3, 0)), // Higher above foot level
+        position.clone().add(new THREE.Vector3(0, PLAYER_HEIGHT - 0.5, 0)) // Even lower below head level
     ];
 
-    // Cast minimal side rays with a very small offset
-    const sideOffset = PLAYER_RADIUS * 0.6; // Minimal side offset for very tight spaces
+    // Cast minimal side rays with an extremely small offset
+    const sideOffset = PLAYER_RADIUS * 0.5; // Minimal side offset for very tight spaces
 
     // Calculate perpendicular vector to movement direction (on xz plane)
     const perpVector = new THREE.Vector3(-rayDirection.z, 0, rayDirection.x).normalize();
@@ -111,9 +111,17 @@ function checkCollision(position, direction, distance) {
         const raycaster = new THREE.Raycaster(origin, rayDirection);
         const intersects = raycaster.intersectObjects(collidableObjects, true);
 
-        // If there's an intersection closer than our movement distance plus threshold, we have a collision
-        if (intersects.length > 0 && intersects[0].distance < distance + COLLISION_THRESHOLD) {
-            return true;
+        // Check each intersection
+        for (const hit of intersects) {
+            // Skip door frames - they should never block movement
+            if (hit.object.userData.isDoorFrame || hit.object.userData.isDoor) {
+                continue;
+            }
+
+            // If there's an intersection closer than our movement distance plus threshold, we have a collision
+            if (hit.distance < distance + COLLISION_THRESHOLD) {
+                return true;
+            }
         }
     }
 
@@ -155,7 +163,7 @@ function init() {
         scene.background = new THREE.Color(0x87ceeb);
 
         camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 1.5, 0); // Further reduced height to match smaller player height
+        camera.position.set(0, 1.3, 0); // Extremely reduced height to match smaller player height
         scene.add(camera);
 
         // Create renderer
