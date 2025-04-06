@@ -28,6 +28,15 @@ Craft a bonfire
 - Gather 2 rocks and a stick
 - Press E to light the bonfire
 
+Alien
+- There's an ellusive alien that will stalk you
+- It will hide behind trees and teleport to new hiding spots when you get too close
+
+Tree regeneration
+- Chop down a tree
+- A new tree will grow somewhere else in the game ensuring you always have wood
+- After chopping some trees look for little ones and watch them grow!
+
 Thats it! That's all there is to do for now.
 
 # Wilderness Survival

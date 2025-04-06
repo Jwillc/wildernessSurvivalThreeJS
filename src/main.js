@@ -7,6 +7,9 @@ import { CraftingSystem } from './craftingSystem.js';
 import { Terminal } from './terminal.js';
 import { Sky } from './Sky.js';
 import { createFireParticles, updateFireParticles, removeFireParticles } from './fireParticles.js';
+import { updateTeleportParticles } from './teleportParticles.js';
+import { Alien } from './alien.js';
+import { TreeRegenerationSystem } from './treeRegenerationSystem.js';
 
 const savedAxePosition = localStorage.getItem('axePosition');
 const savedAxeRotation = localStorage.getItem('axeRotation');
@@ -18,7 +21,7 @@ if (savedAxePosition) {
     axePosition = new THREE.Vector3(pos[0], pos[1], pos[2]);
 } else {
     // Use the position you adjusted in the editor as the default
-    axePosition = new THREE.Vector3(0.5, -0.3, -0.7);
+    axePosition = new THREE.Vector3(0.570, -0.770, -0.960);
 }
 
 if (savedAxeRotation) {
@@ -26,7 +29,7 @@ if (savedAxeRotation) {
     axeRotation = new THREE.Euler(rot[0], rot[1], rot[2]);
 } else {
     // Use the rotation you adjusted in the editor as the default
-    axeRotation = new THREE.Euler(0.2, -0.3, 0.1);
+    axeRotation = new THREE.Euler(0.055, 4.826, 0.020);
 }
 
 let camera, scene, renderer, controls;
@@ -38,6 +41,12 @@ let sky, sun, ambientLight, directionalLight;
 
 // Model variables
 let treeModel, rockModel, logPileModel;
+
+// Alien variable
+let alien;
+
+// Tree regeneration system
+let treeRegenerationSystem;
 const skyParams = {
     turbidity: 8,       // Moderate turbidity for natural sky
     rayleigh: 1.5,      // Moderate rayleigh for natural atmospheric scattering
@@ -334,6 +343,7 @@ function init() {
         inventory = new Inventory();
         buildingSystem = new BuildingSystem(scene, camera, inventory);
         setupInteractionControls(); // Initialize interaction controls
+        setupEditorControls(); // Initialize axe position editor controls
 
         // Initialize crafting system after building system
         craftingSystem = new CraftingSystem(scene, camera, inventory, buildingSystem);
@@ -349,7 +359,7 @@ function init() {
         // Create a loader for all models
         const gltfLoader = new GLTFLoader();
         let modelsLoaded = 0;
-        const totalModels = 3; // Tree, rock, and log pile
+        const totalModels = 4; // Tree, rock, log pile, and axe
         // Note: The bonfire model is loaded by the CraftingSystem class
 
         // Function to check if all models are loaded
@@ -412,6 +422,25 @@ function init() {
             checkAllModelsLoaded();
         }, undefined, function(error) {
             console.error('Error loading log pile model:', error);
+            modelsLoaded++; // Count as loaded even if it failed
+        });
+
+        // Load axe model
+        gltfLoader.load('assets/models/axe.glb', function(gltf) {
+            axeModel = gltf.scene;
+
+            // Make the model cast shadows
+            axeModel.traverse(function(node) {
+                if (node.isMesh) {
+                    node.castShadow = true;
+                    node.receiveShadow = true;
+                }
+            });
+
+            console.log('Axe model loaded successfully');
+            checkAllModelsLoaded();
+        }, undefined, function(error) {
+            console.error('Error loading axe model:', error);
             modelsLoaded++; // Count as loaded even if it failed
         });
 
@@ -640,6 +669,15 @@ function animate() {
                     scene.remove(child);
                 }
             }
+
+            // Update teleport particles
+            if (child.userData.isTeleportParticles) {
+                const deltaTime = clock.getDelta();
+                const shouldRemove = updateTeleportParticles(child, deltaTime);
+                if (shouldRemove) {
+                    scene.remove(child);
+                }
+            }
         });
 
         if (buildingSystem.isBuilding) {
@@ -663,6 +701,19 @@ function animate() {
                 updateFireParticles(object.userData.fireParticles, deltaTime);
             }
         });
+
+        // Update alien if it exists
+        if (alien) {
+            const deltaTime = clock.getDelta();
+            // Get all tree objects from the scene for the alien to hide behind
+            const trees = scene.children.filter(obj => obj.userData && obj.userData.type === 'tree');
+            alien.update(deltaTime, camera.position, trees);
+        }
+
+        // Update tree regeneration system
+        if (treeRegenerationSystem) {
+            treeRegenerationSystem.update();
+        }
     }
 
     // Render the scene
@@ -837,30 +888,51 @@ function tryCraft() {
     }
 }
 
+// Global variable to store the loaded axe model
+let axeModel = null;
+
 function createAxeMesh() {
-    const handleGeometry = new THREE.CylinderGeometry(0.05, 0.05, 1);
-    const handleMaterial = new THREE.MeshStandardMaterial({
-        color: 0x8B4513,
-        roughness: 0.8,
-        metalness: 0.1
-    });
-    const handle = new THREE.Mesh(handleGeometry, handleMaterial);
+    if (axeModel) {
+        // Clone the loaded model
+        const axe = axeModel.clone();
 
-    const headGeometry = new THREE.BoxGeometry(0.3, 0.3, 0.1);
-    const headMaterial = new THREE.MeshStandardMaterial({
-        color: 0x808080,
-        roughness: 0.7,
-        metalness: 0.3
-    });
-    const head = new THREE.Mesh(headGeometry, headMaterial);
-    head.position.set(0.15, 0.4, 0);
-    head.rotation.z = Math.PI / 2;
+        // Apply appropriate scale for first-person view
+        const scale = 3.3; // Reduced scale to make it less prominent
+        axe.scale.set(scale, scale, scale);
 
-    const axe = new THREE.Group();
-    axe.add(handle);
-    axe.add(head);
+        // Additional rotation to ensure the axe is oriented correctly
+        // This rotates the model itself, separate from the animation rotation
+        axe.rotation.z = Math.PI / 2; // Rotate 90 degrees to adjust orientation
 
-    return axe;
+        return axe;
+    } else {
+        // Fallback to procedural axe if model isn't loaded
+        console.warn('Axe model not loaded, using fallback');
+
+        const handleGeometry = new THREE.CylinderGeometry(0.05, 0.05, 1);
+        const handleMaterial = new THREE.MeshStandardMaterial({
+            color: 0x8B4513,
+            roughness: 0.8,
+            metalness: 0.1
+        });
+        const handle = new THREE.Mesh(handleGeometry, handleMaterial);
+
+        const headGeometry = new THREE.BoxGeometry(0.3, 0.3, 0.1);
+        const headMaterial = new THREE.MeshStandardMaterial({
+            color: 0x808080,
+            roughness: 0.7,
+            metalness: 0.3
+        });
+        const head = new THREE.Mesh(headGeometry, headMaterial);
+        head.position.set(0.15, 0.4, 0);
+        head.rotation.z = Math.PI / 2;
+
+        const axe = new THREE.Group();
+        axe.add(handle);
+        axe.add(head);
+
+        return axe;
+    }
 }
 
 function createWoodChips() {
@@ -998,12 +1070,20 @@ function tryChopTree() {
                 interactableObjects.push(logPile);
                 console.log('Log pile created and added to scene');
 
+                // Store the tree position before removing it
+                const treePosition = tree.position.clone();
+
                 const index = interactableObjects.indexOf(tree);
                 if (index > -1) {
                     interactableObjects.splice(index, 1);
                 }
                 scene.remove(tree);
                 treeHealth.delete(tree);
+
+                // Notify the tree regeneration system that a tree was chopped
+                if (treeRegenerationSystem) {
+                    treeRegenerationSystem.onTreeChopped(treePosition);
+                }
             }
         }
     }
@@ -1021,18 +1101,94 @@ function updatePrompts(message) {
 }
 
 function addEnvironmentObjects(useFallbackTrees = false) {
-    for (let i = 0; i < 10; i++) {
+    // Create an extremely dense forest with collision detection
+    const treeCount = 300; // Increased from 100 to 300 trees for extreme density
+    const worldSize = 80; // World size (from -40 to +40)
+    const worldHalfSize = worldSize / 2;
+    const minTreeDistance = 2.5; // Reduced from 4 to 2.5 for denser packing
+    const treePositions = []; // Array to store tree positions for collision detection
+
+    // Store all tree objects for the alien to use
+    const treeObjects = [];
+
+    console.log(`Creating extremely dense forest with ${treeCount} trees...`);
+
+    // Create a grid-based distribution for initial positions
+    const gridSize = Math.ceil(Math.sqrt(treeCount * 2)); // 2x more grid cells than trees for better distribution
+    const cellSize = worldSize / gridSize; // Smaller cells for more precise placement
+
+    // Create a list of potential positions with some randomness within each grid cell
+    const potentialPositions = [];
+    for (let x = 0; x < gridSize; x++) {
+        for (let z = 0; z < gridSize; z++) {
+            // Calculate base position in the grid
+            const baseX = (x * cellSize) - worldHalfSize + (cellSize / 2);
+            const baseZ = (z * cellSize) - worldHalfSize + (cellSize / 2);
+
+            // Add randomness within the cell
+            const randomX = baseX + (Math.random() * cellSize * 0.8 - cellSize * 0.4);
+            const randomZ = baseZ + (Math.random() * cellSize * 0.8 - cellSize * 0.4);
+
+            potentialPositions.push(new THREE.Vector2(randomX, randomZ));
+        }
+    }
+
+    // Shuffle the positions for more natural distribution
+    for (let i = potentialPositions.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [potentialPositions[i], potentialPositions[j]] = [potentialPositions[j], potentialPositions[i]];
+    }
+
+    // Function to check if a position is too close to existing trees
+    // Optimized for better performance with many trees
+    function isTooClose(position) {
+        // Quick spatial check - only check trees that could be within range
+        // This optimization is crucial for handling 300+ trees efficiently
+        for (const existingPos of treePositions) {
+            // Quick check on x and y separately before doing the more expensive distance calculation
+            if (Math.abs(position.x - existingPos.x) < minTreeDistance &&
+                Math.abs(position.y - existingPos.y) < minTreeDistance) {
+
+                const distance = position.distanceTo(existingPos);
+                if (distance < minTreeDistance) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Place trees using the potential positions
+    let treesPlaced = 0;
+    for (const position of potentialPositions) {
+        // Skip if too close to another tree
+        if (isTooClose(position)) {
+            continue;
+        }
+
         let tree;
 
         if (treeModel && !useFallbackTrees) {
             // Use the loaded tree model
             tree = treeModel.clone();
 
-            // Scale the tree appropriately
-            const scale = 3.5 + Math.random() * 3.5; // Random scale between 3.5 and 7.0
+            // Scale the tree with more variety for a natural forest feel
+            // Mix of smaller and larger trees with a bias toward medium-sized trees
+            let scale;
+            const randVal = Math.random();
+            if (randVal < 0.2) {
+                // 20% chance of smaller trees (2.0-3.0)
+                scale = 2.0 + Math.random() * 1.0;
+            } else if (randVal < 0.9) {
+                // 70% chance of medium trees (3.0-5.0)
+                scale = 3.0 + Math.random() * 2.0;
+            } else {
+                // 10% chance of larger trees (5.0-7.0)
+                scale = 5.0 + Math.random() * 2.0;
+            }
             tree.scale.set(scale, scale, scale);
 
-            // Rotate slightly for variety
+            // Rotate for variety
             tree.rotation.y = Math.random() * Math.PI * 2;
         } else {
             // Fallback to procedural tree if model isn't loaded
@@ -1060,18 +1216,121 @@ function addEnvironmentObjects(useFallbackTrees = false) {
             tree.add(foliage);
         }
 
-        // Position the tree
+        // Position the tree using our grid-based position
         tree.position.set(
-            Math.random() * 40 - 20,
+            position.x,
             0, // Position at ground level, the model has its own height
-            Math.random() * 40 - 20
+            position.y // Vector2 uses y for the z-coordinate
         );
+
         tree.userData.type = 'tree';
         scene.add(tree);
         interactableObjects.push(tree);
+        treeObjects.push(tree); // Add to tree objects array for alien
+
+        // Store the position for collision detection
+        treePositions.push(position);
+
+        treesPlaced++;
+        if (treesPlaced >= treeCount) {
+            break;
+        }
     }
 
-    for (let i = 0; i < 15; i++) { // Increased number of rocks to better fill the grid
+    console.log(`Successfully placed ${treesPlaced} trees in the extremely dense forest`);
+
+    // Create a larger clearing around the player's starting position for the denser forest
+    const clearingRadius = 10; // Increased from 8 to 10 for more starting space
+    const playerStartPos = new THREE.Vector2(0, 0);
+
+    // Remove trees that are too close to the player's starting position
+    for (let i = scene.children.length - 1; i >= 0; i--) {
+        const object = scene.children[i];
+        if (object.userData.type === 'tree') {
+            const treePos = new THREE.Vector2(object.position.x, object.position.z);
+            const distanceToPlayer = treePos.distanceTo(playerStartPos);
+
+            if (distanceToPlayer < clearingRadius) {
+                // Remove from scene and interactable objects
+                scene.remove(object);
+                const index = interactableObjects.indexOf(object);
+                if (index > -1) {
+                    interactableObjects.splice(index, 1);
+                }
+            }
+        }
+    }
+
+    // Add rocks scattered throughout the forest
+    const rockCount = 30; // Increased from 15 to 30 rocks
+    const minRockDistance = 2; // Minimum distance between rocks
+    const rockPositions = []; // Array to store rock positions for collision detection
+
+    console.log(`Adding ${rockCount} rocks to the environment...`);
+
+    // Create potential positions for rocks (different from tree positions)
+    const rockPotentialPositions = [];
+    for (let x = 0; x < gridSize * 1.5; x++) {
+        for (let z = 0; z < gridSize * 1.5; z++) {
+            // Calculate base position in a finer grid
+            const baseX = ((x * cellSize) / 1.5) - worldHalfSize + (cellSize / 3);
+            const baseZ = ((z * cellSize) / 1.5) - worldHalfSize + (cellSize / 3);
+
+            // Add randomness within the cell
+            const randomX = baseX + (Math.random() * cellSize * 0.6 - cellSize * 0.3);
+            const randomZ = baseZ + (Math.random() * cellSize * 0.6 - cellSize * 0.3);
+
+            rockPotentialPositions.push(new THREE.Vector2(randomX, randomZ));
+        }
+    }
+
+    // Shuffle the positions for more natural distribution
+    for (let i = rockPotentialPositions.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [rockPotentialPositions[i], rockPotentialPositions[j]] = [rockPotentialPositions[j], rockPotentialPositions[i]];
+    }
+
+    // Function to check if a rock position is too close to existing rocks or trees
+    // Optimized for better performance with many objects
+    function isRockTooClose(position) {
+        // Check distance to trees with quick spatial check first
+        const treeCheckDistance = minTreeDistance / 2; // Rocks can be closer to trees than trees to trees
+        for (const treePos of treePositions) {
+            // Quick check on x and y separately before doing the more expensive distance calculation
+            if (Math.abs(position.x - treePos.x) < treeCheckDistance &&
+                Math.abs(position.y - treePos.y) < treeCheckDistance) {
+
+                const distance = position.distanceTo(treePos);
+                if (distance < treeCheckDistance) {
+                    return true;
+                }
+            }
+        }
+
+        // Check distance to other rocks with quick spatial check first
+        for (const rockPos of rockPositions) {
+            // Quick check on x and y separately before doing the more expensive distance calculation
+            if (Math.abs(position.x - rockPos.x) < minRockDistance &&
+                Math.abs(position.y - rockPos.y) < minRockDistance) {
+
+                const distance = position.distanceTo(rockPos);
+                if (distance < minRockDistance) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // Place rocks using the potential positions
+    let rocksPlaced = 0;
+    for (const position of rockPotentialPositions) {
+        // Skip if too close to trees or other rocks
+        if (isRockTooClose(position)) {
+            continue;
+        }
+
         let rock;
 
         if (rockModel && !useFallbackTrees) { // If rock model is loaded and we're not using fallbacks
@@ -1110,96 +1369,220 @@ function addEnvironmentObjects(useFallbackTrees = false) {
             );
         }
 
-        // Position the rock with more consistent spacing
-        // Create a grid-like distribution with slight randomness
-        const gridSize = 10; // Size of the grid
-        const cellSize = 40 / gridSize; // Size of each cell
-        const gridX = i % gridSize;
-        const gridZ = Math.floor(i / gridSize);
-
+        // Position the rock using our grid-based position
         rock.position.set(
-            -20 + gridX * cellSize + Math.random() * (cellSize * 0.5),
+            position.x,
             0, // Position at ground level, the model has its own height
-            -20 + gridZ * cellSize + Math.random() * (cellSize * 0.5)
+            position.y // Vector2 uses y for the z-coordinate
         );
 
         rock.userData.type = 'rock';
         rock.castShadow = true;
         scene.add(rock);
         interactableObjects.push(rock);
+
+        // Store the position for collision detection
+        rockPositions.push(position);
+
+        rocksPlaced++;
+        if (rocksPlaced >= rockCount) {
+            break;
+        }
     }
+
+    console.log(`Placed ${rocksPlaced} rocks in the environment`);
+
+    // Initialize the alien after environment is created
+    if (treeObjects.length > 0) {
+        console.log('Initializing alien to stalk the player...');
+        alien = new Alien(scene, camera, camera.position);
+    } else {
+        console.warn('No trees available for alien to hide behind');
+    }
+
+    // Initialize the tree regeneration system
+    console.log('Initializing tree regeneration system...');
+    treeRegenerationSystem = new TreeRegenerationSystem(scene, interactableObjects);
+    treeRegenerationSystem.setTreeModel(treeModel);
+
+    // Convert tree positions from Vector2 to match the format used in the regeneration system
+    const treePositionsForSystem = treePositions.map(pos => new THREE.Vector2(pos.x, pos.y));
+    treeRegenerationSystem.updateTreePositions(treePositionsForSystem);
 }
 
 // Function to reset axe position to default (can be called from console for testing)
 function resetAxePosition() {
-    localStorage.removeItem('axePosition');
-    localStorage.removeItem('axeRotation');
-    console.log('Axe position and rotation reset to default. Refresh the page to apply.');
+    // Set to our new improved default position and rotation
+    axePosition = new THREE.Vector3(0.570, -0.770, -0.960);
+    axeRotation = new THREE.Euler(0.055, 4.826, 0.020);
+
+    // Update localStorage with these values
+    localStorage.setItem('axePosition', JSON.stringify([axePosition.x, axePosition.y, axePosition.z]));
+    localStorage.setItem('axeRotation', JSON.stringify([axeRotation.x, axeRotation.y, axeRotation.z]));
+
+    // If axe is currently visible, update it immediately
+    if (axeMesh) {
+        axeMesh.position.copy(axePosition);
+        axeMesh.rotation.copy(axeRotation);
+    }
+
+    console.log('Axe position and rotation reset to new default values and applied.');
 }
 
 function setupEditorControls() {
-    const MOVE_SPEED = 0.01;
-    const ROTATE_SPEED = 0.01;
+    let MOVE_SPEED = 0.01;
+    let ROTATE_SPEED = 0.01;
+
+    // Create a position display element
+    const positionDisplay = document.createElement('div');
+    positionDisplay.id = 'position-display';
+    positionDisplay.style.position = 'fixed';
+    positionDisplay.style.bottom = '10px';
+    positionDisplay.style.right = '10px';
+    positionDisplay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    positionDisplay.style.color = 'white';
+    positionDisplay.style.padding = '10px';
+    positionDisplay.style.fontFamily = 'monospace';
+    positionDisplay.style.fontSize = '14px';
+    positionDisplay.style.borderRadius = '5px';
+    positionDisplay.style.display = 'none';
+    document.body.appendChild(positionDisplay);
+
+    // Function to update position display
+    function updatePositionDisplay() {
+        if (!axeMesh) return;
+
+        const pos = axeMesh.position;
+        const rot = axeMesh.rotation;
+
+        positionDisplay.innerHTML = `
+            <strong>Axe Position:</strong><br>
+            X: ${pos.x.toFixed(3)}<br>
+            Y: ${pos.y.toFixed(3)}<br>
+            Z: ${pos.z.toFixed(3)}<br>
+            <br>
+            <strong>Axe Rotation:</strong><br>
+            X: ${rot.x.toFixed(3)}<br>
+            Y: ${rot.y.toFixed(3)}<br>
+            Z: ${rot.z.toFixed(3)}<br>
+            <br>
+            <strong>Copy these values:</strong><br>
+            Position: [${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}]<br>
+            Rotation: [${rot.x.toFixed(3)}, ${rot.y.toFixed(3)}, ${rot.z.toFixed(3)}]<br>
+        `;
+    }
 
     document.addEventListener('keydown', (event) => {
+        // Toggle editor mode with CTRL+E
         if (event.ctrlKey && event.code === 'KeyE') {
             event.preventDefault();
             editorMode = !editorMode;
 
             if (editorMode) {
+                // Enter editor mode
                 document.getElementById('interaction-prompt').textContent =
-                    'EDITOR MODE - Arrow keys to move, WASD to rotate, CTRL+E to save';
+                    'EDITOR MODE - Arrow keys to move, < > for height, WASD to rotate, CTRL+E to save';
                 document.getElementById('interaction-prompt').style.display = 'block';
+                positionDisplay.style.display = 'block';
+                updatePositionDisplay();
+
+                // Unlock controls when in editor mode
+                if (controls.isLocked) {
+                    controls.unlock();
+                }
             } else {
+                // Exit editor mode and save changes
                 if (axeMesh) {
                     axePosition.copy(axeMesh.position);
                     axeRotation.copy(axeMesh.rotation);
                     localStorage.setItem('axePosition', JSON.stringify([axeMesh.position.x, axeMesh.position.y, axeMesh.position.z]));
                     localStorage.setItem('axeRotation', JSON.stringify([axeMesh.rotation.x, axeMesh.rotation.y, axeMesh.rotation.z]));
+                    console.log('Saved axe position:', [axeMesh.position.x, axeMesh.position.y, axeMesh.position.z]);
+                    console.log('Saved axe rotation:', [axeMesh.rotation.x, axeMesh.rotation.y, axeMesh.rotation.z]);
                 }
                 document.getElementById('interaction-prompt').style.display = 'none';
+                positionDisplay.style.display = 'none';
             }
             return;
         }
 
+        // Handle editor mode key controls
         if (!editorMode || !axeMesh) return;
 
+        // Position controls with arrow keys
         switch (event.code) {
             case 'ArrowUp':
-                axeMesh.position.y += MOVE_SPEED;
+                axeMesh.position.z -= MOVE_SPEED;
+                updatePositionDisplay();
                 break;
             case 'ArrowDown':
-                axeMesh.position.y -= MOVE_SPEED;
+                axeMesh.position.z += MOVE_SPEED;
+                updatePositionDisplay();
                 break;
             case 'ArrowLeft':
                 axeMesh.position.x -= MOVE_SPEED;
+                updatePositionDisplay();
                 break;
             case 'ArrowRight':
                 axeMesh.position.x += MOVE_SPEED;
+                updatePositionDisplay();
                 break;
-            case 'PageUp':
-                axeMesh.position.z -= MOVE_SPEED;
+            case 'Period': // > key
+                axeMesh.position.y += MOVE_SPEED;
+                updatePositionDisplay();
                 break;
-            case 'PageDown':
-                axeMesh.position.z += MOVE_SPEED;
+            case 'Comma': // < key
+                axeMesh.position.y -= MOVE_SPEED;
+                updatePositionDisplay();
                 break;
+
+            // Rotation controls with WASD
             case 'KeyW':
-                if (!event.ctrlKey) axeMesh.rotation.x -= ROTATE_SPEED;
+                axeMesh.rotation.x -= ROTATE_SPEED;
+                updatePositionDisplay();
                 break;
             case 'KeyS':
-                if (!event.ctrlKey) axeMesh.rotation.x += ROTATE_SPEED;
+                axeMesh.rotation.x += ROTATE_SPEED;
+                updatePositionDisplay();
                 break;
             case 'KeyA':
-                if (!event.ctrlKey) axeMesh.rotation.y -= ROTATE_SPEED;
+                axeMesh.rotation.y -= ROTATE_SPEED;
+                updatePositionDisplay();
                 break;
             case 'KeyD':
-                if (!event.ctrlKey) axeMesh.rotation.y += ROTATE_SPEED;
+                axeMesh.rotation.y += ROTATE_SPEED;
+                updatePositionDisplay();
                 break;
             case 'KeyQ':
                 axeMesh.rotation.z -= ROTATE_SPEED;
+                updatePositionDisplay();
                 break;
             case 'KeyE':
-                if (!event.ctrlKey) axeMesh.rotation.z += ROTATE_SPEED;
+                axeMesh.rotation.z += ROTATE_SPEED;
+                updatePositionDisplay();
+                break;
+
+            // Adjust movement speed
+            case 'Digit1':
+                // Fine adjustment
+                MOVE_SPEED = 0.001;
+                ROTATE_SPEED = 0.001;
+                document.getElementById('interaction-prompt').textContent =
+                    'EDITOR MODE - Fine adjustment (0.001) - Arrows/< > to move, WASD/QE to rotate';
+                break;
+            case 'Digit2':
+                // Medium adjustment
+                MOVE_SPEED = 0.01;
+                ROTATE_SPEED = 0.01;
+                document.getElementById('interaction-prompt').textContent =
+                    'EDITOR MODE - Medium adjustment (0.01) - Arrows/< > to move, WASD/QE to rotate';
+                break;
+            case 'Digit3':
+                // Coarse adjustment
+                MOVE_SPEED = 0.1;
+                ROTATE_SPEED = 0.1;
+                document.getElementById('interaction-prompt').textContent =
+                    'EDITOR MODE - Coarse adjustment (0.1) - Arrows/< > to move, WASD/QE to rotate';
                 break;
         }
     });
