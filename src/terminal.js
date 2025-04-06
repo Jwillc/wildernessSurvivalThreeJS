@@ -16,7 +16,8 @@ export class Terminal {
             'help': this.showHelp.bind(this),
             'unlimited logs': this.unlimitedLogs.bind(this),
             'clear': this.clear.bind(this),
-            'reload models': this.reloadModels.bind(this)
+            'reload models': this.reloadModels.bind(this),
+            'make night': this.makeNight.bind(this)
         };
 
         // Get DOM elements
@@ -148,6 +149,7 @@ export class Terminal {
         this.print('  unlimited logs - Toggle unlimited logs for testing');
         this.print('  clear - Clear the terminal');
         this.print('  reload models - Reload crafting models if they failed to load');
+        this.print('  make night - Force night time for testing the UFO');
     }
 
     reloadModels() {
@@ -179,5 +181,33 @@ export class Terminal {
     clear() {
         this.outputElement.innerHTML = '';
         this.print('Terminal cleared');
+    }
+
+    makeNight() {
+        // Access the day-night cycle from the game object
+        if (this.game.dayNightCycle) {
+            const dayNightCycle = this.game.dayNightCycle;
+
+            // Set the time to night
+            dayNightCycle.setTimeOfDay('night');
+
+            // Adjust the cycle timing to be at the start of night
+            // Calculate the time that would correspond to the start of night
+            const now = Date.now();
+            const totalCycleDuration = dayNightCycle.dayDuration + dayNightCycle.nightDuration;
+            const nightStartOffset = dayNightCycle.dayDuration;
+
+            // Set the cycle start time to make current time be at night start
+            dayNightCycle.cycleStartTime = now - nightStartOffset;
+
+            // Make sure the cycle is not paused
+            dayNightCycle.isPaused = false;
+
+            this.print('Night time activated. The UFO will appear shortly.');
+            this.print('Remember to stay under a roof to avoid abduction!');
+            this.print('Night will last for approximately 2 minutes.');
+        } else {
+            this.print('Day-night cycle system not available');
+        }
     }
 }

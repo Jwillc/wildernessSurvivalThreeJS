@@ -8,8 +8,13 @@ import { Terminal } from './terminal.js';
 import { Sky } from './Sky.js';
 import { createFireParticles, updateFireParticles, removeFireParticles } from './fireParticles.js';
 import { updateTeleportParticles } from './teleportParticles.js';
+import { updateGibsParticles } from './gibsParticles.js';
 import { Alien } from './alien.js';
 import { TreeRegenerationSystem } from './treeRegenerationSystem.js';
+import { DayNightCycle } from './dayNightCycle.js';
+import { UFOSystem } from './ufoSystem.js';
+import { GameOverMenu } from './gameOverMenu.js';
+import { DayNightHUD } from './dayNightHUD.js';
 
 const savedAxePosition = localStorage.getItem('axePosition');
 const savedAxeRotation = localStorage.getItem('axeRotation');
@@ -47,6 +52,12 @@ let alien;
 
 // Tree regeneration system
 let treeRegenerationSystem;
+
+// Day-night cycle and UFO systems
+let dayNightCycle, ufoSystem;
+
+// Game over menu and HUD
+let gameOverMenu, dayNightHUD;
 const skyParams = {
     turbidity: 8,       // Moderate turbidity for natural sky
     rayleigh: 1.5,      // Moderate rayleigh for natural atmospheric scattering
@@ -464,6 +475,9 @@ function init() {
 function animate() {
     requestAnimationFrame(animate);
 
+    // Calculate delta time once per frame
+    const deltaTime = clock.getDelta();
+
     // Check if building system is active but should be reset
     if (buildingSystem) {
         // Check if force cleanup flag is set
@@ -503,11 +517,14 @@ function animate() {
         const speed = 0.1;
         let newVelocity = new THREE.Vector3(0, 0, 0);
 
-        // Calculate desired velocity
-        if (moveForward || moveBackward) {
+        // Check if player is in UFO beam - if so, prevent WASD movement
+        const playerCanMove = !(ufoSystem && ufoSystem.isPlayerInBeam && ufoSystem.isPlayerInBeam());
+
+        // Calculate desired velocity - only if player can move
+        if (playerCanMove && (moveForward || moveBackward)) {
             newVelocity.z = direction.z * speed;
         }
-        if (moveLeft || moveRight) {
+        if (playerCanMove && (moveLeft || moveRight)) {
             newVelocity.x = direction.x * speed;
         }
 
@@ -672,8 +689,15 @@ function animate() {
 
             // Update teleport particles
             if (child.userData.isTeleportParticles) {
-                const deltaTime = clock.getDelta();
                 const shouldRemove = updateTeleportParticles(child, deltaTime);
+                if (shouldRemove) {
+                    scene.remove(child);
+                }
+            }
+
+            // Update gibs particles
+            if (child.userData.isGibsParticles) {
+                const shouldRemove = updateGibsParticles(child, deltaTime);
                 if (shouldRemove) {
                     scene.remove(child);
                 }
@@ -696,15 +720,13 @@ function animate() {
         // Update fire particles for all lit bonfires
         scene.traverse(object => {
             if (object.userData.type === 'bonfire' && object.userData.isLit && object.userData.fireParticles) {
-                // Calculate delta time in seconds
-                const deltaTime = clock.getDelta();
+                // Use the delta time calculated at the beginning of the frame
                 updateFireParticles(object.userData.fireParticles, deltaTime);
             }
         });
 
         // Update alien if it exists
         if (alien) {
-            const deltaTime = clock.getDelta();
             // Get all tree objects from the scene for the alien to hide behind
             const trees = scene.children.filter(obj => obj.userData && obj.userData.type === 'tree');
             alien.update(deltaTime, camera.position, trees);
@@ -712,7 +734,38 @@ function animate() {
 
         // Update tree regeneration system
         if (treeRegenerationSystem) {
-            treeRegenerationSystem.update();
+            treeRegenerationSystem.update(deltaTime);
+        }
+
+        // Update day-night cycle
+        if (dayNightCycle) {
+            dayNightCycle.update(deltaTime);
+
+            // Update day-night HUD
+            if (dayNightHUD) {
+                dayNightHUD.update();
+            }
+        }
+
+        // Update UFO system
+        if (ufoSystem && ufoSystem.isActive) {
+            const playerAbducted = ufoSystem.update(deltaTime, camera.position, buildingSystem);
+
+            // If player has been abducted, show game over screen
+            if (playerAbducted) {
+                // Pause the game
+                controls.unlock();
+
+                // Show game over menu
+                if (gameOverMenu) {
+                    gameOverMenu.show();
+                }
+
+                // Pause day-night cycle
+                if (dayNightCycle) {
+                    dayNightCycle.pause();
+                }
+            }
         }
     }
 
@@ -1408,6 +1461,49 @@ function addEnvironmentObjects(useFallbackTrees = false) {
     // Convert tree positions from Vector2 to match the format used in the regeneration system
     const treePositionsForSystem = treePositions.map(pos => new THREE.Vector2(pos.x, pos.y));
     treeRegenerationSystem.updateTreePositions(treePositionsForSystem);
+
+    // Initialize the day-night cycle
+    console.log('Initializing day-night cycle...');
+    dayNightCycle = new DayNightCycle(scene, skyParams, updateSunPosition);
+
+    // Initialize the UFO system
+    console.log('Initializing UFO system...');
+    ufoSystem = new UFOSystem(scene, camera, camera.position);
+
+    // Initialize the game over menu
+    console.log('Initializing game over menu...');
+    gameOverMenu = new GameOverMenu();
+    gameOverMenu.initialize(() => {
+        // Restart game when button is clicked
+        location.reload();
+    });
+
+    // Set up day-night cycle callbacks
+    dayNightCycle.setCallbacks(
+        // Night start callback
+        () => {
+            console.log('Night has started, UFO is appearing...');
+            ufoSystem.startNightCycle();
+        },
+        // Night end callback
+        () => {
+            console.log('Night has ended, UFO is disappearing...');
+            ufoSystem.endNightCycle();
+        }
+    );
+
+    // Start the day-night cycle
+    dayNightCycle.start();
+
+    // Initialize the day-night HUD
+    console.log('Initializing day-night HUD...');
+    dayNightHUD = new DayNightHUD(dayNightCycle);
+    dayNightHUD.initialize();
+
+    // Update terminal with day-night cycle reference
+    if (terminal) {
+        terminal.game.dayNightCycle = dayNightCycle;
+    }
 }
 
 // Function to reset axe position to default (can be called from console for testing)
@@ -1598,6 +1694,11 @@ function onKeyDown(event) {
         }
     }
 
+    // Don't process other keys when terminal is open
+    if (terminal && terminal.isOpen) {
+        return;
+    }
+
     // Handle crafting menu toggle with I key
     if (event.code === 'KeyI') {
         if (craftingSystem) {
@@ -1608,11 +1709,6 @@ function onKeyDown(event) {
         } else {
             console.warn('Crafting system not initialized yet');
         }
-    }
-
-    // Don't process other keys when terminal is open
-    if (terminal && terminal.isOpen) {
-        return;
     }
 
     if (editorMode) return;
@@ -1674,27 +1770,34 @@ function onKeyDown(event) {
             break;
 
         case 'KeyT':
-            // Cycle through times of day - balanced lighting
-            if (skyParams.elevation > 30) {
-                // Switch to sunset
-                skyParams.elevation = 10;
-                skyParams.turbidity = 10;
-                skyParams.rayleigh = 2;
-                console.log('Time of day: Sunset');
-            } else if (skyParams.elevation > 0) {
-                // Switch to night
-                skyParams.elevation = -10;
-                skyParams.turbidity = 6;
-                skyParams.rayleigh = 1;
-                console.log('Time of day: Night');
+            // Cycle through times of day manually
+            if (dayNightCycle) {
+                if (dayNightCycle.isNight) {
+                    // Force day
+                    dayNightCycle.setTimeOfDay('day');
+                    console.log('Forced time of day: Day');
+                } else {
+                    // Force night
+                    dayNightCycle.setTimeOfDay('night');
+                    console.log('Forced time of day: Night');
+                }
             } else {
-                // Switch to day
-                skyParams.elevation = 45;
-                skyParams.turbidity = 8;
-                skyParams.rayleigh = 1.5;
-                console.log('Time of day: Day');
+                // Fallback to old method if day-night cycle isn't initialized
+                if (skyParams.elevation > 0) {
+                    // Switch to night
+                    skyParams.elevation = -10;
+                    skyParams.turbidity = 6;
+                    skyParams.rayleigh = 1;
+                    console.log('Time of day: Night');
+                } else {
+                    // Switch to day
+                    skyParams.elevation = 45;
+                    skyParams.turbidity = 8;
+                    skyParams.rayleigh = 1.5;
+                    console.log('Time of day: Day');
+                }
+                updateSunPosition();
             }
-            updateSunPosition();
             break;
     }
 }

@@ -37,7 +37,15 @@ Tree regeneration
 - A new tree will grow somewhere else in the game ensuring you always have wood
 - After chopping some trees look for little ones and watch them grow!
 
-Thats it! That's all there is to do for now.
+Abduction
+- At night a UFO will come and abduct you.
+- If you have a roof over your head you will be safe
+
+Day-night cycle
+- The day-night cycle are 2 minutes long
+- Stay indoors at night or get abducted
+
+Thats it! That's all there is to do for now. Build shelter and survive the nights.
 
 # Wilderness Survival
 

@@ -13,7 +13,7 @@ export class TreeRegenerationSystem {
         this.maxGrowthTime = 120000; // 2 minutes to fully grow
         this.regrowthDelay = 30000; // 30 seconds before a new tree starts growing
         this.pendingRegrowth = []; // Queue of timestamps for pending tree regrowth
-        
+
         // Growth stages
         this.growthStages = [
             { scale: 0.5, time: 0 },           // Sapling
@@ -42,7 +42,7 @@ export class TreeRegenerationSystem {
             timestamp: Date.now() + this.regrowthDelay,
             originalPosition: position.clone() // Store the original position for reference
         });
-        
+
         console.log(`Tree chopped at ${position.x.toFixed(2)}, ${position.z.toFixed(2)}. Scheduled regrowth in ${this.regrowthDelay/1000} seconds.`);
     }
 
@@ -55,13 +55,13 @@ export class TreeRegenerationSystem {
                 (Math.random() * this.worldSize) - this.worldHalfSize,
                 (Math.random() * this.worldSize) - this.worldHalfSize
             );
-            
+
             // Check if the position is valid (not too close to other trees)
             if (!this.isTooCloseToTrees(position)) {
                 return position;
             }
         }
-        
+
         // If we couldn't find a valid position after 50 attempts, try a different approach
         // Try to find a position in a less dense area
         return this.findPositionInLessDenseArea();
@@ -80,11 +80,11 @@ export class TreeRegenerationSystem {
                 }
             }
         }
-        
+
         // Also check growing trees
         for (const growingTree of this.growingTrees) {
             const treePos = new THREE.Vector2(growingTree.position.x, growingTree.position.z);
-            
+
             if (Math.abs(position.x - treePos.x) < this.minTreeDistance &&
                 Math.abs(position.y - treePos.y) < this.minTreeDistance) {
 
@@ -94,7 +94,7 @@ export class TreeRegenerationSystem {
                 }
             }
         }
-        
+
         return false;
     }
 
@@ -104,23 +104,23 @@ export class TreeRegenerationSystem {
         const gridSize = 10; // 10x10 grid
         const cellSize = this.worldSize / gridSize;
         const grid = Array(gridSize).fill().map(() => Array(gridSize).fill(0));
-        
+
         // Count trees in each grid cell
         for (const pos of this.treePositions) {
             // Convert world position to grid cell
             const gridX = Math.floor((pos.x + this.worldHalfSize) / cellSize);
             const gridY = Math.floor((pos.y + this.worldHalfSize) / cellSize);
-            
+
             // Ensure we're within grid bounds
             if (gridX >= 0 && gridX < gridSize && gridY >= 0 && gridY < gridSize) {
                 grid[gridX][gridY]++;
             }
         }
-        
+
         // Find the cell with the fewest trees
         let minCount = Infinity;
         let bestCell = { x: 0, y: 0 };
-        
+
         for (let x = 0; x < gridSize; x++) {
             for (let y = 0; y < gridSize; y++) {
                 if (grid[x][y] < minCount) {
@@ -129,11 +129,11 @@ export class TreeRegenerationSystem {
                 }
             }
         }
-        
+
         // Generate a random position within that cell
         const worldX = (bestCell.x * cellSize) - this.worldHalfSize + (Math.random() * cellSize);
         const worldY = (bestCell.y * cellSize) - this.worldHalfSize + (Math.random() * cellSize);
-        
+
         return new THREE.Vector2(worldX, worldY);
     }
 
@@ -143,41 +143,41 @@ export class TreeRegenerationSystem {
             console.warn('Tree model not set, cannot create growing tree');
             return null;
         }
-        
+
         // Find a valid position for the new tree
         const position = this.findValidTreePosition();
-        
+
         // Clone the tree model
         const tree = this.treeModel.clone();
-        
+
         // Start with a tiny scale (sapling)
         const initialScale = this.growthStages[0].scale;
         tree.scale.set(initialScale, initialScale, initialScale);
-        
+
         // Position the tree
         tree.position.set(
             position.x,
             0, // Position at ground level
             position.y // Vector2 uses y for the z-coordinate
         );
-        
+
         // Set tree data
         tree.userData.type = 'tree';
         tree.userData.isGrowing = true;
         tree.userData.growthStartTime = Date.now();
         tree.userData.originalScale = this.getRandomMatureScale();
-        
+
         // Add to scene and tracking arrays
         this.scene.add(tree);
         this.interactableObjects.push(tree);
         this.growingTrees.push(tree);
         this.treePositions.push(position);
-        
+
         console.log(`New tree sapling created at ${position.x.toFixed(2)}, ${position.y.toFixed(2)}`);
-        
+
         return tree;
     }
-    
+
     // Get a random scale for a mature tree (similar to the distribution in main.js)
     getRandomMatureScale() {
         const randVal = Math.random();
@@ -194,16 +194,16 @@ export class TreeRegenerationSystem {
     }
 
     // Update the growth of all growing trees
-    update() {
+    update(deltaTime) {
         const now = Date.now();
-        
+
         // Check if any pending trees should start growing
         if (this.pendingRegrowth.length > 0) {
             const readyTrees = this.pendingRegrowth.filter(item => now >= item.timestamp);
-            
+
             for (const readyTree of readyTrees) {
                 this.createGrowingTree();
-                
+
                 // Remove from pending list
                 const index = this.pendingRegrowth.indexOf(readyTree);
                 if (index !== -1) {
@@ -211,19 +211,19 @@ export class TreeRegenerationSystem {
                 }
             }
         }
-        
+
         // Update growing trees
         for (let i = this.growingTrees.length - 1; i >= 0; i--) {
             const tree = this.growingTrees[i];
             const growthTime = now - tree.userData.growthStartTime;
             const growthProgress = Math.min(growthTime / this.maxGrowthTime, 1);
-            
+
             // Calculate current scale based on growth stages
             const targetScale = this.calculateCurrentScale(growthProgress, tree.userData.originalScale);
-            
+
             // Apply the scale
             tree.scale.set(targetScale, targetScale, targetScale);
-            
+
             // If fully grown, remove from growing trees list
             if (growthProgress >= 1) {
                 tree.userData.isGrowing = false;
@@ -232,25 +232,25 @@ export class TreeRegenerationSystem {
             }
         }
     }
-    
+
     // Calculate the current scale based on growth progress and growth stages
     calculateCurrentScale(progress, targetScale) {
         // Find the appropriate growth stage
         for (let i = 1; i < this.growthStages.length; i++) {
             const prevStage = this.growthStages[i - 1];
             const currStage = this.growthStages[i];
-            
+
             if (progress <= currStage.time) {
                 // Calculate scale between these two stages
                 const stageProgress = (progress - prevStage.time) / (currStage.time - prevStage.time);
                 const baseScale = prevStage.scale + (currStage.scale - prevStage.scale) * stageProgress;
-                
+
                 // Scale relative to the target final scale
                 const scaleFactor = targetScale / this.growthStages[this.growthStages.length - 1].scale;
                 return baseScale * scaleFactor;
             }
         }
-        
+
         // If we're past all stages, return the target scale
         return targetScale;
     }
