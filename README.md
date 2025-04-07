@@ -47,7 +47,7 @@ Day-night cycle
 
 Bow and arrow
 - Press I to open the crafting menu
-- Select bow list (requires 5 strings and 1 stick)
+- Select bow from the list (requires 5 strings and 1 stick)
 - Arrows are free to craft at the moment
 
 Thats it! That's all there is to do for now. Build shelter and survive the nights.
