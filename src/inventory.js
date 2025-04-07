@@ -7,7 +7,10 @@ export class Inventory {
             'log': 999, // Logs can stack up to 999
             'rock': 999, // Rocks can stack up to 999
             'stick': 999, // Sticks can stack up to 999
-            'axe': 1 // Axes don't stack
+            'axe': 1, // Axes don't stack
+            'bow': 1, // Bows don't stack
+            'arrow': 999, // Arrows can stack up to 999
+            'string': 999 // String can stack up to 999
         };
     }
 

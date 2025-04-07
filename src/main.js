@@ -15,6 +15,8 @@ import { DayNightCycle } from './dayNightCycle.js';
 import { UFOSystem } from './ufoSystem.js';
 import { GameOverMenu } from './gameOverMenu.js';
 import { DayNightHUD } from './dayNightHUD.js';
+import { BowAndArrowSystem } from './bowAndArrow.js';
+import { GrassSystem } from './grassSystem.js';
 
 const savedAxePosition = localStorage.getItem('axePosition');
 const savedAxeRotation = localStorage.getItem('axeRotation');
@@ -58,6 +60,12 @@ let dayNightCycle, ufoSystem;
 
 // Game over menu and HUD
 let gameOverMenu, dayNightHUD;
+
+// Bow and arrow system
+let bowAndArrowSystem;
+
+// Grass system
+let grassSystem;
 const skyParams = {
     turbidity: 8,       // Moderate turbidity for natural sky
     rayleigh: 1.5,      // Moderate rayleigh for natural atmospheric scattering
@@ -79,6 +87,7 @@ const INTERACT_DISTANCE = 3;
 const raycaster = new THREE.Raycaster();
 
 let axeMesh = null;
+// bowMesh is managed by the BowAndArrowSystem
 let editorMode = false;
 let spacePressed = false;
 
@@ -86,6 +95,9 @@ let spacePressed = false;
 let axeAnimating = false;
 let axeAnimationStartTime = 0;
 let axeAnimationDuration = 500; // milliseconds
+
+// Current equipped weapon
+let equippedWeapon = null; // 'axe' or 'bow'
 
 // Global flag to force blueprint cleanup
 let forceCleanupBlueprint = false;
@@ -110,6 +122,9 @@ let buildingSystem, craftingSystem;
 document.addEventListener('DOMContentLoaded', () => {
     // Make resetAxePosition available globally for debugging
     window.resetAxePosition = resetAxePosition;
+
+    // Make THREE available globally for debugging
+    window.THREE = THREE;
 
     init();
 });
@@ -359,12 +374,20 @@ function init() {
         // Initialize crafting system after building system
         craftingSystem = new CraftingSystem(scene, camera, inventory, buildingSystem);
 
+        // Initialize bow and arrow system
+        bowAndArrowSystem = new BowAndArrowSystem(scene, camera, inventory);
+
+        // Initialize grass system
+        grassSystem = new GrassSystem(scene, camera, inventory, interactableObjects);
+
         // Initialize terminal
         terminal = new Terminal({
             controls: controls,
             inventory: inventory,
             buildingSystem: buildingSystem,
-            craftingSystem: craftingSystem
+            craftingSystem: craftingSystem,
+            scene: scene,
+            bowAndArrowSystem: bowAndArrowSystem
         });
 
         // Create a loader for all models
@@ -624,7 +647,7 @@ function animate() {
         }
 
         // Handle axe animation
-        if (axeMesh && !editorMode) {
+        if (axeMesh && !editorMode && equippedWeapon === 'axe') {
             if (axeAnimating) {
                 // Calculate animation progress (0 to 1)
                 const elapsed = Date.now() - axeAnimationStartTime;
@@ -667,6 +690,40 @@ function animate() {
             } else {
                 // Reset to default position when not animating
                 axeMesh.rotation.copy(axeRotation);
+            }
+        }
+
+        // Update bow and arrow system
+        if (bowAndArrowSystem) {
+            bowAndArrowSystem.update(deltaTime);
+        }
+
+        // Update grass system
+        if (grassSystem) {
+            grassSystem.update();
+
+            // Check for grass interaction
+            raycaster.setFromCamera(new THREE.Vector2(), camera);
+
+            if (grassSystem.isCrafting) {
+                // Check if player moved away from grass while crafting
+                // Use a slightly larger distance check (4 instead of 3) to be a bit more forgiving
+                raycaster.far = 2; // Temporarily increase raycaster distance
+                const grassObject = grassSystem.checkGrassInteraction(raycaster, 2, true);
+                raycaster.far = 100; // Reset to default
+
+                // Cancel if player is not looking at grass and has moved a moderate distance away
+                // This allows some movement and looking around, but not too much
+                if (!grassObject && grassSystem.distanceToNearestGrass(camera.position) > 3) {
+                    grassSystem.cancelCrafting();
+                    updatePrompts('');
+                }
+            } else {
+                // When not crafting, check if looking at grass to show prompt
+                const grassObject = grassSystem.checkGrassInteraction(raycaster);
+                if (grassObject) {
+                    updatePrompts('Press E to craft string from plant fiber');
+                }
             }
         }
 
@@ -788,6 +845,18 @@ function setupInteractionControls() {
                     buildingSystem.rotateWall();
                 }
                 break;
+            case 'Digit1':
+                // Equip axe if available
+                if (inventory.hasItems(['axe'])) {
+                    equipWeapon('axe');
+                }
+                break;
+            case 'Digit2':
+                // Equip bow if available
+                if (inventory.hasItems(['bow'])) {
+                    equipWeapon('bow');
+                }
+                break;
         }
     });
 }
@@ -823,6 +892,20 @@ function tryInteract() {
         // Attempt to place the crafted item
         craftingSystem.place();
         return;
+    }
+
+    // Check for grass interaction
+    if (grassSystem && !grassSystem.isCrafting) {
+        raycaster.setFromCamera(new THREE.Vector2(), camera);
+        const grassObject = grassSystem.checkGrassInteraction(raycaster);
+        if (grassObject) {
+            console.log('Looking at grass');
+            updatePrompts('Press E to craft string from plant fiber');
+
+            // Start crafting when E is pressed
+            grassSystem.startCrafting(grassObject);
+            return;
+        }
     }
 
     raycaster.setFromCamera(new THREE.Vector2(), camera);
@@ -932,12 +1015,8 @@ function tryCraft() {
         inventory.addItem(new Item('axe', 1));
         updatePrompts('');
 
-        if (!axeMesh) {
-            axeMesh = createAxeMesh();
-            camera.add(axeMesh);
-            axeMesh.position.copy(axePosition);
-            axeMesh.rotation.copy(axeRotation);
-        }
+        // Equip the axe automatically when crafted
+        equipWeapon('axe');
     }
 }
 
@@ -1072,6 +1151,76 @@ function startAxeAnimation() {
     axeAnimating = true;
     axeAnimationStartTime = Date.now();
 }
+
+function equipWeapon(weapon) {
+    console.log(`Equipping ${weapon}...`);
+
+    // Check if bowAndArrowSystem is initialized
+    if (weapon === 'bow' && !bowAndArrowSystem) {
+        console.error('Cannot equip bow - bowAndArrowSystem is not initialized');
+        return;
+    }
+
+    // Make sure pointer is locked for proper game control
+    ensurePointerLock();
+
+    // Unequip current weapon
+    if (equippedWeapon === 'axe' && axeMesh) {
+        console.log('Removing axe from camera');
+        camera.remove(axeMesh);
+        axeMesh = null;
+    } else if (equippedWeapon === 'bow') {
+        console.log('Unequipping bow');
+        bowAndArrowSystem.unequipBow();
+    }
+
+    // Equip new weapon
+    if (weapon === 'axe') {
+        console.log('Creating and adding axe mesh to camera');
+        if (!axeMesh) {
+            axeMesh = createAxeMesh();
+            camera.add(axeMesh);
+            axeMesh.position.copy(axePosition);
+            axeMesh.rotation.copy(axeRotation);
+        }
+    } else if (weapon === 'bow') {
+        console.log('Calling bowAndArrowSystem.equipBow()');
+        bowAndArrowSystem.equipBow();
+
+        // Add a delayed check to verify the bow was equipped
+        setTimeout(() => {
+            if (!bowAndArrowSystem.isBowEquipped) {
+                console.warn('Bow was not equipped after timeout, trying again...');
+                bowAndArrowSystem.equipBow();
+            }
+        }, 1000);
+    }
+
+    equippedWeapon = weapon;
+    console.log(`Successfully equipped ${weapon}`);
+}
+
+function ensurePointerLock() {
+    // Check if pointer is already locked
+    if (!document.pointerLockElement) {
+        console.log('Pointer not locked, requesting lock');
+        // Request pointer lock with a slight delay to avoid conflicts
+        setTimeout(() => {
+            try {
+                // Get the canvas element
+                const canvas = document.querySelector('canvas');
+                if (canvas) {
+                    canvas.requestPointerLock();
+                }
+            } catch (error) {
+                console.warn('Error requesting pointer lock:', error);
+            }
+        }, 100);
+    }
+}
+
+// Make equipWeapon available globally for the crafting system
+window.equipWeapon = equipWeapon;
 
 function tryChopTree() {
     if (!controls.isLocked || !inventory.hasItems(['axe'])) return;
@@ -1528,6 +1677,10 @@ function resetAxePosition() {
 function setupEditorControls() {
     let MOVE_SPEED = 0.01;
     let ROTATE_SPEED = 0.01;
+    let SCALE_SPEED = 0.1;
+
+    // Track what we're currently editing (0 = weapon, 1 = arrow, 2 = arrow orientation)
+    let editingMode = 0;
 
     // Create a position display element
     const positionDisplay = document.createElement('div');
@@ -1546,26 +1699,138 @@ function setupEditorControls() {
 
     // Function to update position display
     function updatePositionDisplay() {
-        if (!axeMesh) return;
+        let displayHTML = '';
 
-        const pos = axeMesh.position;
-        const rot = axeMesh.rotation;
+        if (editingMode === 0) {
+            // Editing weapon (axe or bow)
+            // Get the active weapon mesh
+            let weaponMesh;
+            let weaponName;
 
-        positionDisplay.innerHTML = `
-            <strong>Axe Position:</strong><br>
-            X: ${pos.x.toFixed(3)}<br>
-            Y: ${pos.y.toFixed(3)}<br>
-            Z: ${pos.z.toFixed(3)}<br>
-            <br>
-            <strong>Axe Rotation:</strong><br>
-            X: ${rot.x.toFixed(3)}<br>
-            Y: ${rot.y.toFixed(3)}<br>
-            Z: ${rot.z.toFixed(3)}<br>
-            <br>
-            <strong>Copy these values:</strong><br>
-            Position: [${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}]<br>
-            Rotation: [${rot.x.toFixed(3)}, ${rot.y.toFixed(3)}, ${rot.z.toFixed(3)}]<br>
-        `;
+            if (equippedWeapon === 'axe' && axeMesh) {
+                weaponMesh = axeMesh;
+                weaponName = 'Axe';
+            } else if (equippedWeapon === 'bow' && bowAndArrowSystem && bowAndArrowSystem.bowMesh) {
+                weaponMesh = bowAndArrowSystem.bowMesh;
+                weaponName = 'Bow';
+            }
+
+            if (!weaponMesh) return;
+
+            const pos = weaponMesh.position;
+            const rot = weaponMesh.rotation;
+
+            // Basic HTML for position and rotation
+            displayHTML = `
+                <strong>${weaponName} Position:</strong><br>
+                X: ${pos.x.toFixed(3)}<br>
+                Y: ${pos.y.toFixed(3)}<br>
+                Z: ${pos.z.toFixed(3)}<br>
+                <br>
+                <strong>${weaponName} Rotation:</strong><br>
+                X: ${rot.x.toFixed(3)}<br>
+                Y: ${rot.y.toFixed(3)}<br>
+                Z: ${rot.z.toFixed(3)}<br>
+                <br>
+            `;
+
+            // Add scale information for bow
+            if (weaponName === 'Bow') {
+                const scale = weaponMesh.scale.x; // Assuming uniform scaling
+                displayHTML += `
+                <strong>Bow Scale:</strong><br>
+                Scale: ${scale.toFixed(3)}<br>
+                <br>
+                `;
+            }
+
+            // Add copy values section
+            displayHTML += `
+                <strong>Copy these values:</strong><br>
+                Position: [${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}]<br>
+                Rotation: [${rot.x.toFixed(3)}, ${rot.y.toFixed(3)}, ${rot.z.toFixed(3)}]<br>
+            `;
+
+            // Add scale values for bow
+            if (weaponName === 'Bow') {
+                const scale = weaponMesh.scale.x;
+                displayHTML += `Scale: ${scale.toFixed(3)}<br>`;
+            }
+
+            // Add mode switching instructions
+            if (weaponName === 'Bow' && bowAndArrowSystem && bowAndArrowSystem.isArrowNocked) {
+                displayHTML += `<br><strong>Press 2 to edit arrow position</strong>`;
+            }
+        } else if (editingMode === 1) {
+            // Editing arrow on bow
+            if (equippedWeapon === 'bow' && bowAndArrowSystem && bowAndArrowSystem.currentArrow) {
+                const arrowMesh = bowAndArrowSystem.currentArrow;
+                const pos = arrowMesh.position;
+                const rot = arrowMesh.rotation;
+                const scale = arrowMesh.scale.x; // Assuming uniform scaling
+
+                displayHTML = `
+                    <strong>Arrow Position:</strong><br>
+                    X: ${pos.x.toFixed(3)}<br>
+                    Y: ${pos.y.toFixed(3)}<br>
+                    Z: ${pos.z.toFixed(3)}<br>
+                    <br>
+                    <strong>Arrow Rotation:</strong><br>
+                    X: ${rot.x.toFixed(3)}<br>
+                    Y: ${rot.y.toFixed(3)}<br>
+                    Z: ${rot.z.toFixed(3)}<br>
+                    <br>
+                    <strong>Arrow Scale:</strong><br>
+                    Scale: ${scale.toFixed(3)}<br>
+                    <br>
+                    <strong>Copy these values:</strong><br>
+                    Position: [${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}]<br>
+                    Rotation: [${rot.x.toFixed(3)}, ${rot.y.toFixed(3)}, ${rot.z.toFixed(3)}]<br>
+                    Scale: ${scale.toFixed(3)}<br>
+                    <br>
+                    <strong>Press 1 to edit bow position</strong><br>
+                    <strong>Press 3 to edit arrow orientation</strong>
+                `;
+            } else {
+                // No arrow to edit
+                displayHTML = `<strong>No arrow to edit</strong><br><br><strong>Press 1 to edit weapon</strong>`;
+                editingMode = 0; // Switch back to weapon editing
+            }
+        } else if (editingMode === 2) {
+            // Editing arrow shooting orientation
+            if (equippedWeapon === 'bow' && bowAndArrowSystem) {
+                // Create the orientation helper if it doesn't exist
+                if (!bowAndArrowSystem.shootingOrientationHelper) {
+                    bowAndArrowSystem.createShootingOrientationHelper();
+                }
+
+                const rot = bowAndArrowSystem.shootingOrientation;
+
+                displayHTML = `
+                    <strong>Arrow Shooting Orientation:</strong><br>
+                    X: ${rot.x.toFixed(3)}<br>
+                    Y: ${rot.y.toFixed(3)}<br>
+                    Z: ${rot.z.toFixed(3)}<br>
+                    <br>
+                    <strong>Controls:</strong><br>
+                    W/S: Rotate X axis<br>
+                    A/D: Rotate Y axis<br>
+                    Q/E: Rotate Z axis<br>
+                    <br>
+                    <strong>Copy these values:</strong><br>
+                    Rotation: [${rot.x.toFixed(3)}, ${rot.y.toFixed(3)}, ${rot.z.toFixed(3)}]<br>
+                    <br>
+                    <strong>Press 1 to edit bow position</strong><br>
+                    <strong>Press 2 to edit arrow position</strong>
+                `;
+            } else {
+                // No bow equipped
+                displayHTML = `<strong>Bow not equipped</strong><br><br><strong>Press 1 to edit weapon</strong>`;
+                editingMode = 0; // Switch back to weapon editing
+            }
+        }
+
+        positionDisplay.innerHTML = displayHTML;
     }
 
     document.addEventListener('keydown', (event) => {
@@ -1576,8 +1841,16 @@ function setupEditorControls() {
 
             if (editorMode) {
                 // Enter editor mode
-                document.getElementById('interaction-prompt').textContent =
-                    'EDITOR MODE - Arrow keys to move, < > for height, WASD to rotate, CTRL+E to save';
+                let instructions = 'EDITOR MODE - Arrow keys to move, < > for height, WASD to rotate';
+
+                // Add scale instructions for bow
+                if (equippedWeapon === 'bow') {
+                    instructions += ', Z/X to scale, CTRL+E to save';
+                } else {
+                    instructions += ', CTRL+E to save';
+                }
+
+                document.getElementById('interaction-prompt').textContent = instructions;
                 document.getElementById('interaction-prompt').style.display = 'block';
                 positionDisplay.style.display = 'block';
                 updatePositionDisplay();
@@ -1588,14 +1861,71 @@ function setupEditorControls() {
                 }
             } else {
                 // Exit editor mode and save changes
-                if (axeMesh) {
-                    axePosition.copy(axeMesh.position);
-                    axeRotation.copy(axeMesh.rotation);
-                    localStorage.setItem('axePosition', JSON.stringify([axeMesh.position.x, axeMesh.position.y, axeMesh.position.z]));
-                    localStorage.setItem('axeRotation', JSON.stringify([axeMesh.rotation.x, axeMesh.rotation.y, axeMesh.rotation.z]));
-                    console.log('Saved axe position:', [axeMesh.position.x, axeMesh.position.y, axeMesh.position.z]);
-                    console.log('Saved axe rotation:', [axeMesh.rotation.x, axeMesh.rotation.y, axeMesh.rotation.z]);
+                if (editingMode === 0) {
+                    // Save weapon position
+                    if (equippedWeapon === 'axe' && axeMesh) {
+                        // Save axe position and rotation
+                        axePosition.copy(axeMesh.position);
+                        axeRotation.copy(axeMesh.rotation);
+                        localStorage.setItem('axePosition', JSON.stringify([axeMesh.position.x, axeMesh.position.y, axeMesh.position.z]));
+                        localStorage.setItem('axeRotation', JSON.stringify([axeMesh.rotation.x, axeMesh.rotation.y, axeMesh.rotation.z]));
+                        console.log('Saved axe position:', [axeMesh.position.x, axeMesh.position.y, axeMesh.position.z]);
+                        console.log('Saved axe rotation:', [axeMesh.rotation.x, axeMesh.rotation.y, axeMesh.rotation.z]);
+                    } else if (equippedWeapon === 'bow' && bowAndArrowSystem && bowAndArrowSystem.bowMesh) {
+                        // Save bow position, rotation, and scale
+                        const bowMesh = bowAndArrowSystem.bowMesh;
+                        bowAndArrowSystem.bowPosition.copy(bowMesh.position);
+                        bowAndArrowSystem.bowRotation.copy(bowMesh.rotation);
+                        bowAndArrowSystem.bowScale = bowMesh.scale.x; // Assuming uniform scaling
+
+                        // Save to localStorage
+                        localStorage.setItem('bowPosition', JSON.stringify([bowMesh.position.x, bowMesh.position.y, bowMesh.position.z]));
+                        localStorage.setItem('bowRotation', JSON.stringify([bowMesh.rotation.x, bowMesh.rotation.y, bowMesh.rotation.z]));
+                        localStorage.setItem('bowScale', bowMesh.scale.x);
+
+                        console.log('Saved bow position:', [bowMesh.position.x, bowMesh.position.y, bowMesh.position.z]);
+                        console.log('Saved bow rotation:', [bowMesh.rotation.x, bowMesh.rotation.y, bowMesh.rotation.z]);
+                        console.log('Saved bow scale:', bowMesh.scale.x);
+                    }
+                } else if (editingMode === 1 || editingMode === 2) {
+                    // Save arrow position, rotation, and scale (mode 1) or orientation (mode 2)
+                    if (equippedWeapon === 'bow' && bowAndArrowSystem) {
+                        // If we were in orientation editing mode, save the shooting orientation
+                        if (editingMode === 2) {
+                            // Save the shooting orientation
+                            const orientation = bowAndArrowSystem.shootingOrientation;
+                            localStorage.setItem('arrowShootingOrientation', JSON.stringify([orientation.x, orientation.y, orientation.z]));
+                            console.log('Saved arrow shooting orientation:', [orientation.x, orientation.y, orientation.z]);
+
+                            // Remove the orientation helper
+                            bowAndArrowSystem.removeShootingOrientationHelper();
+                        }
+
+                        // Only save arrow position/rotation if we have an arrow and were in arrow position editing mode
+                        if (editingMode === 1 && bowAndArrowSystem.currentArrow) {
+                            const arrowMesh = bowAndArrowSystem.currentArrow;
+
+                            // Save arrow position, rotation, and scale to localStorage
+                            localStorage.setItem('arrowPosition', JSON.stringify([arrowMesh.position.x, arrowMesh.position.y, arrowMesh.position.z]));
+                            localStorage.setItem('arrowRotation', JSON.stringify([arrowMesh.rotation.x, arrowMesh.rotation.y, arrowMesh.rotation.z]));
+                            localStorage.setItem('arrowScale', arrowMesh.scale.x);
+
+                            console.log('Saved arrow position:', [arrowMesh.position.x, arrowMesh.position.y, arrowMesh.position.z]);
+                            console.log('Saved arrow rotation:', [arrowMesh.rotation.x, arrowMesh.rotation.y, arrowMesh.rotation.z]);
+                            console.log('Saved arrow scale:', arrowMesh.scale.x);
+
+                            // Update the default arrow position in the bow and arrow system
+                            bowAndArrowSystem.arrowOffsetX = arrowMesh.position.x;
+                            bowAndArrowSystem.arrowOffsetY = arrowMesh.position.y;
+                            bowAndArrowSystem.arrowOffsetZ = arrowMesh.position.z;
+                            bowAndArrowSystem.arrowRotationX = arrowMesh.rotation.x;
+                            bowAndArrowSystem.arrowRotationY = arrowMesh.rotation.y;
+                            bowAndArrowSystem.arrowRotationZ = arrowMesh.rotation.z;
+                            bowAndArrowSystem.arrowScale = arrowMesh.scale.x;
+                        }
+                    }
                 }
+
                 document.getElementById('interaction-prompt').style.display = 'none';
                 positionDisplay.style.display = 'none';
             }
@@ -1603,88 +1933,220 @@ function setupEditorControls() {
         }
 
         // Handle editor mode key controls
-        if (!editorMode || !axeMesh) return;
+        if (!editorMode) return;
+
+        // Special handling for orientation editing mode
+        if (editingMode === 2) {
+            if (equippedWeapon === 'bow' && bowAndArrowSystem) {
+                // Get the orientation to edit
+                const orientation = bowAndArrowSystem.shootingOrientation;
+
+                // Handle rotation controls
+                switch (event.code) {
+                    case 'KeyW':
+                        orientation.x -= ROTATE_SPEED;
+                        bowAndArrowSystem.updateShootingOrientationHelper();
+                        updatePositionDisplay();
+                        return;
+                    case 'KeyS':
+                        orientation.x += ROTATE_SPEED;
+                        bowAndArrowSystem.updateShootingOrientationHelper();
+                        updatePositionDisplay();
+                        return;
+                    case 'KeyA':
+                        orientation.y -= ROTATE_SPEED;
+                        bowAndArrowSystem.updateShootingOrientationHelper();
+                        updatePositionDisplay();
+                        return;
+                    case 'KeyD':
+                        orientation.y += ROTATE_SPEED;
+                        bowAndArrowSystem.updateShootingOrientationHelper();
+                        updatePositionDisplay();
+                        return;
+                    case 'KeyQ':
+                        orientation.z -= ROTATE_SPEED;
+                        bowAndArrowSystem.updateShootingOrientationHelper();
+                        updatePositionDisplay();
+                        return;
+                    case 'KeyE':
+                        orientation.z += ROTATE_SPEED;
+                        bowAndArrowSystem.updateShootingOrientationHelper();
+                        updatePositionDisplay();
+                        return;
+                }
+            }
+        }
+
+        // Get the mesh to edit based on editing mode
+        let targetMesh;
+
+        if (editingMode === 0) {
+            // Editing weapon
+            if (equippedWeapon === 'axe' && axeMesh) {
+                targetMesh = axeMesh;
+            } else if (equippedWeapon === 'bow' && bowAndArrowSystem && bowAndArrowSystem.bowMesh) {
+                targetMesh = bowAndArrowSystem.bowMesh;
+            } else {
+                return; // No weapon to edit
+            }
+        } else if (editingMode === 1) {
+            // Editing arrow
+            if (equippedWeapon === 'bow' && bowAndArrowSystem && bowAndArrowSystem.currentArrow) {
+                targetMesh = bowAndArrowSystem.currentArrow;
+            } else {
+                // No arrow to edit, switch back to weapon
+                editingMode = 0;
+                updatePositionDisplay();
+                return;
+            }
+        } else if (editingMode === 2) {
+            // Orientation editing mode doesn't use targetMesh for movement/rotation
+            return;
+        }
 
         // Position controls with arrow keys
         switch (event.code) {
             case 'ArrowUp':
-                axeMesh.position.z -= MOVE_SPEED;
+                targetMesh.position.z -= MOVE_SPEED;
                 updatePositionDisplay();
                 break;
             case 'ArrowDown':
-                axeMesh.position.z += MOVE_SPEED;
+                targetMesh.position.z += MOVE_SPEED;
                 updatePositionDisplay();
                 break;
             case 'ArrowLeft':
-                axeMesh.position.x -= MOVE_SPEED;
+                targetMesh.position.x -= MOVE_SPEED;
                 updatePositionDisplay();
                 break;
             case 'ArrowRight':
-                axeMesh.position.x += MOVE_SPEED;
+                targetMesh.position.x += MOVE_SPEED;
                 updatePositionDisplay();
                 break;
             case 'Period': // > key
-                axeMesh.position.y += MOVE_SPEED;
+                targetMesh.position.y += MOVE_SPEED;
                 updatePositionDisplay();
                 break;
             case 'Comma': // < key
-                axeMesh.position.y -= MOVE_SPEED;
+                targetMesh.position.y -= MOVE_SPEED;
                 updatePositionDisplay();
                 break;
 
             // Rotation controls with WASD
             case 'KeyW':
-                axeMesh.rotation.x -= ROTATE_SPEED;
+                targetMesh.rotation.x -= ROTATE_SPEED;
                 updatePositionDisplay();
                 break;
             case 'KeyS':
-                axeMesh.rotation.x += ROTATE_SPEED;
+                targetMesh.rotation.x += ROTATE_SPEED;
                 updatePositionDisplay();
                 break;
             case 'KeyA':
-                axeMesh.rotation.y -= ROTATE_SPEED;
+                targetMesh.rotation.y -= ROTATE_SPEED;
                 updatePositionDisplay();
                 break;
             case 'KeyD':
-                axeMesh.rotation.y += ROTATE_SPEED;
+                targetMesh.rotation.y += ROTATE_SPEED;
                 updatePositionDisplay();
                 break;
             case 'KeyQ':
-                axeMesh.rotation.z -= ROTATE_SPEED;
+                targetMesh.rotation.z -= ROTATE_SPEED;
                 updatePositionDisplay();
                 break;
             case 'KeyE':
-                axeMesh.rotation.z += ROTATE_SPEED;
+                targetMesh.rotation.z += ROTATE_SPEED;
                 updatePositionDisplay();
                 break;
 
-            // Adjust movement speed
+            // Scale controls (Z/X keys)
+            case 'KeyZ':
+                // Decrease scale
+                const decreaseScale = Math.max(0.1, targetMesh.scale.x - SCALE_SPEED);
+                targetMesh.scale.set(decreaseScale, decreaseScale, decreaseScale);
+                updatePositionDisplay();
+                break;
+            case 'KeyX':
+                // Increase scale
+                const increaseScale = Math.min(20, targetMesh.scale.x + SCALE_SPEED);
+                targetMesh.scale.set(increaseScale, increaseScale, increaseScale);
+                updatePositionDisplay();
+                break;
+
+            // Switch between editing bow and arrow
             case 'Digit1':
-                // Fine adjustment
-                MOVE_SPEED = 0.001;
-                ROTATE_SPEED = 0.001;
-                document.getElementById('interaction-prompt').textContent =
-                    'EDITOR MODE - Fine adjustment (0.001) - Arrows/< > to move, WASD/QE to rotate';
+                if (editingMode === 1 || editingMode === 2) {
+                    // Switch to editing weapon from arrow position or orientation mode
+                    editingMode = 0;
+                    updatePositionDisplay();
+                    document.getElementById('interaction-prompt').textContent = 'EDITOR MODE - Now editing weapon - Arrows/< > to move, WASD/QE to rotate';
+                } else {
+                    // Fine adjustment
+                    MOVE_SPEED = 0.001;
+                    ROTATE_SPEED = 0.001;
+                    SCALE_SPEED = 0.01;
+                    let finePrompt = 'EDITOR MODE - Fine adjustment (0.001) - Arrows/< > to move, WASD/QE to rotate';
+                    if (equippedWeapon === 'bow') {
+                        finePrompt += ', Z/X to scale';
+                    }
+                    document.getElementById('interaction-prompt').textContent = finePrompt;
+                }
                 break;
             case 'Digit2':
-                // Medium adjustment
-                MOVE_SPEED = 0.01;
-                ROTATE_SPEED = 0.01;
-                document.getElementById('interaction-prompt').textContent =
-                    'EDITOR MODE - Medium adjustment (0.01) - Arrows/< > to move, WASD/QE to rotate';
+                if (equippedWeapon === 'bow' && bowAndArrowSystem && bowAndArrowSystem.isArrowNocked) {
+                    // Switch to editing arrow position (from either weapon or orientation mode)
+                    editingMode = 1;
+                    updatePositionDisplay();
+                    document.getElementById('interaction-prompt').textContent = 'EDITOR MODE - Now editing arrow - Arrows/< > to move, WASD/QE to rotate, Z/X to scale';
+                } else {
+                    // Medium adjustment
+                    MOVE_SPEED = 0.01;
+                    ROTATE_SPEED = 0.01;
+                    SCALE_SPEED = 0.1;
+                    let mediumPrompt = 'EDITOR MODE - Medium adjustment (0.01) - Arrows/< > to move, WASD/QE to rotate';
+                    if (equippedWeapon === 'bow') {
+                        mediumPrompt += ', Z/X to scale';
+                    }
+                    document.getElementById('interaction-prompt').textContent = mediumPrompt;
+                }
                 break;
             case 'Digit3':
-                // Coarse adjustment
-                MOVE_SPEED = 0.1;
-                ROTATE_SPEED = 0.1;
-                document.getElementById('interaction-prompt').textContent =
-                    'EDITOR MODE - Coarse adjustment (0.1) - Arrows/< > to move, WASD/QE to rotate';
+                if (equippedWeapon === 'bow' && bowAndArrowSystem) {
+                    // Switch to editing arrow shooting orientation
+                    editingMode = 2;
+                    updatePositionDisplay();
+                    document.getElementById('interaction-prompt').textContent = 'EDITOR MODE - Now editing arrow shooting orientation - WASD/QE to rotate';
+
+                    // Create the orientation helper if it doesn't exist
+                    if (!bowAndArrowSystem.shootingOrientationHelper) {
+                        bowAndArrowSystem.createShootingOrientationHelper();
+                    }
+                } else {
+                    // Coarse adjustment
+                    MOVE_SPEED = 0.1;
+                    ROTATE_SPEED = 0.1;
+                    SCALE_SPEED = 0.5;
+                    let coarsePrompt = 'EDITOR MODE - Coarse adjustment (0.1) - Arrows/< > to move, WASD/QE to rotate';
+                    if (equippedWeapon === 'bow') {
+                        coarsePrompt += ', Z/X to scale';
+                    }
+                    document.getElementById('interaction-prompt').textContent = coarsePrompt;
+                }
                 break;
         }
     });
 }
 
 function onKeyDown(event) {
+    // Track Ctrl key for bow and arrow system
+    if (event.ctrlKey && bowAndArrowSystem) {
+        bowAndArrowSystem.ctrlPressed = true;
+    }
+
+    // Track number keys for bow and arrow system
+    if (event.code.startsWith('Digit') && bowAndArrowSystem) {
+        const digit = event.code.replace('Digit', '');
+        bowAndArrowSystem.keyPressed = digit;
+    }
+
     // Handle terminal toggle with ~ key (Backquote)
     if (event.code === 'Backquote') {
         if (terminal) {
@@ -1727,13 +2189,16 @@ function onKeyDown(event) {
             moveRight = true;
             break;
         case 'Space':
-            if (inventory.hasItems(['axe'])) {
-                spacePressed = true;
+            spacePressed = true;
+            if (equippedWeapon === 'axe' && inventory.hasItems(['axe'])) {
                 // Only start animation and try chopping if not already animating
                 if (!axeAnimating) {
                     startAxeAnimation();
                     tryChopTree();
                 }
+            } else if (equippedWeapon === 'bow' && inventory.hasItems(['bow', 'arrow'])) {
+                // Shoot arrow
+                bowAndArrowSystem.shootArrow();
             }
             break;
         case 'KeyB':
@@ -1803,6 +2268,13 @@ function onKeyDown(event) {
 }
 
 function onKeyUp(event) {
+    // Reset Ctrl key state for bow and arrow system
+    if (event.code === 'ControlLeft' || event.code === 'ControlRight') {
+        if (bowAndArrowSystem) {
+            bowAndArrowSystem.ctrlPressed = false;
+        }
+    }
+
     // Don't process keys when terminal is open
     if (terminal && terminal.isOpen) {
         return;

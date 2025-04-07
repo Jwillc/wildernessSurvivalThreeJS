@@ -17,7 +17,8 @@ export class Terminal {
             'unlimited logs': this.unlimitedLogs.bind(this),
             'clear': this.clear.bind(this),
             'reload models': this.reloadModels.bind(this),
-            'make night': this.makeNight.bind(this)
+            'make night': this.makeNight.bind(this),
+            'debug trees': this.debugTrees.bind(this)
         };
 
         // Get DOM elements
@@ -150,6 +151,7 @@ export class Terminal {
         this.print('  clear - Clear the terminal');
         this.print('  reload models - Reload crafting models if they failed to load');
         this.print('  make night - Force night time for testing the UFO');
+        this.print('  debug trees - Toggle tree and arrow collision boxes');
     }
 
     reloadModels() {
@@ -208,6 +210,98 @@ export class Terminal {
             this.print('Night will last for approximately 2 minutes.');
         } else {
             this.print('Day-night cycle system not available');
+        }
+    }
+
+    debugTrees() {
+        // Toggle debug mode for trees and arrows
+        if (window.debugTreesEnabled === undefined) {
+            window.debugTreesEnabled = false;
+        }
+
+        window.debugTreesEnabled = !window.debugTreesEnabled;
+
+        if (window.debugTreesEnabled) {
+            this.print('Tree and arrow debug mode enabled');
+            this.print('Showing collision boxes for trees and arrows');
+
+            // Create helpers for all trees
+            const THREE = window.THREE; // Get THREE from window
+            if (!THREE) {
+                this.print('THREE.js not available, cannot create debug helpers');
+                return;
+            }
+
+            // Get all trees from interactable objects
+            const trees = window.interactableObjects.filter(obj => obj.userData.type === 'tree');
+            this.print(`Found ${trees.length} trees to debug`);
+
+            // Create a helper for each tree
+            window.debugHelpers = window.debugHelpers || [];
+
+            // Remove any existing helpers
+            if (window.debugHelpers.length > 0) {
+                for (const helper of window.debugHelpers) {
+                    if (helper.parent) {
+                        helper.parent.remove(helper);
+                    }
+                }
+                window.debugHelpers = [];
+            }
+
+            // Create new helpers
+            for (const tree of trees) {
+                // Create a box helper
+                const helper = new THREE.BoxHelper(tree, 0xff0000);
+                helper.userData.isDebugHelper = true;
+                this.game.scene.add(helper);
+                window.debugHelpers.push(helper);
+            }
+
+            // Also add helpers for any arrows in flight
+            if (this.game.bowAndArrowSystem) {
+                const arrows = this.game.bowAndArrowSystem.arrows;
+                this.print(`Found ${arrows.length} arrows to debug`);
+
+                for (const arrow of arrows) {
+                    const helper = new THREE.BoxHelper(arrow, 0x00ff00);
+                    helper.userData.isDebugHelper = true;
+                    this.game.scene.add(helper);
+                    window.debugHelpers.push(helper);
+                }
+            }
+
+            // Set up an update function to keep the helpers in sync with the objects
+            if (!window.updateDebugHelpers) {
+                window.updateDebugHelpers = () => {
+                    if (!window.debugTreesEnabled) return;
+
+                    // Update all helpers
+                    for (const helper of window.debugHelpers) {
+                        if (helper.object) {
+                            helper.update();
+                        }
+                    }
+
+                    // Request the next frame
+                    requestAnimationFrame(window.updateDebugHelpers);
+                };
+
+                // Start the update loop
+                window.updateDebugHelpers();
+            }
+        } else {
+            this.print('Tree and arrow debug mode disabled');
+
+            // Remove all helpers
+            if (window.debugHelpers && window.debugHelpers.length > 0) {
+                for (const helper of window.debugHelpers) {
+                    if (helper.parent) {
+                        helper.parent.remove(helper);
+                    }
+                }
+                window.debugHelpers = [];
+            }
         }
     }
 }

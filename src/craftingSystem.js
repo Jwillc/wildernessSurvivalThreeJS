@@ -39,6 +39,25 @@ class CraftingSystem {
                 // 2.0 = Extra large bonfire
                 scale: 3.5, // Scale factor for the model (larger value = bigger bonfire)
                 model: null
+            },
+            {
+                name: 'Bow',
+                modelPath: 'assets/models/bow.glb',
+                requirements: {
+                    string: 5,
+                    stick: 1
+                },
+                scale: 0.5,
+                model: null,
+                isEquipment: true // Flag to indicate this is equipment, not a placeable item
+            },
+            {
+                name: 'Arrow',
+                modelPath: 'assets/models/arrow.glb',
+                requirements: {}, // No requirements for now - arrows are free to craft
+                scale: 0.5,
+                model: null,
+                isEquipment: true // Flag to indicate this is equipment, not a placeable item
             }
         ];
 
@@ -219,6 +238,48 @@ class CraftingSystem {
         }
     }
 
+    craftEquipmentItem(item) {
+        console.log(`Crafting equipment item: ${item.name}`);
+
+        try {
+            // Check if we have the required resources
+            if (!this.canCraft(item)) {
+                console.log(`Cannot craft ${item.name} - missing resources`);
+                return;
+            }
+
+            // Consume resources
+            for (const [resource, amount] of Object.entries(item.requirements)) {
+                // Remove the required amount at once
+                this.inventory.removeItem(resource, amount);
+            }
+
+            // Add to inventory
+            const itemType = item.name.toLowerCase();
+
+            // If crafting arrows, add 20 at a time
+            if (itemType === 'arrow') {
+                this.inventory.addItem(itemType, 20);
+                console.log(`Added 20 ${item.name}s to inventory`);
+            } else {
+                this.inventory.addItem(itemType);
+                console.log(`Added ${item.name} to inventory`);
+            }
+
+            // Close the crafting menu
+            this.closeMenu();
+
+            // Automatically equip bow when crafted
+            if (itemType === 'bow' && window.equipWeapon) {
+                window.equipWeapon('bow');
+            }
+
+            console.log(`Successfully crafted ${item.name}`);
+        } catch (error) {
+            console.error(`Error crafting ${item.name}:`, error);
+        }
+    }
+
     updateItemAvailability() {
         const items = document.querySelectorAll('.crafting-item');
 
@@ -322,9 +383,16 @@ class CraftingSystem {
         console.log(`Setting selectedItem to:`, item);
         this.selectedItem = item;
 
+        // For equipment items (bow, arrow), craft immediately
+        if (item.isEquipment) {
+            console.log(`${item.name} is equipment, crafting immediately`);
+            this.craftEquipmentItem(item); // Use special method for equipment
+            return;
+        }
+
+        // For placeable items, continue with normal placement
         // Close menu but keep the selection
         this.closeMenu(true);
-
         this.startPlacement();
     }
 
@@ -345,8 +413,18 @@ class CraftingSystem {
         console.log(`Using model:`, this.selectedItem.model);
         this.isCrafting = true;
 
+        // For equipment items (bow, arrow), skip blueprint and just craft immediately
+        if (this.selectedItem.isEquipment) {
+            console.log(`${this.selectedItem.name} is equipment, crafting immediately`);
+            // Show crafting instructions
+            const promptElement = document.getElementById('interaction-prompt');
+            promptElement.textContent = 'Press E to craft, Escape to cancel';
+            promptElement.style.display = 'block';
+            return;
+        }
+
         try {
-            // Create blueprint
+            // Create blueprint for placeable items
             const blueprint = this.selectedItem.model.clone();
             console.log('Created blueprint:', blueprint);
 
@@ -421,11 +499,6 @@ class CraftingSystem {
             return;
         }
 
-        if (!this.currentBlueprint) {
-            console.error('No blueprint to place');
-            return;
-        }
-
         if (!this.selectedItem) {
             console.error('No item selected');
             return;
@@ -436,6 +509,48 @@ class CraftingSystem {
             for (const [resource, amount] of Object.entries(this.selectedItem.requirements)) {
                 // Remove the required amount at once
                 this.inventory.removeItem(resource, amount);
+            }
+
+            // Check if this is equipment (bow or arrow)
+            if (this.selectedItem.isEquipment) {
+                // Add to inventory instead of placing in the world
+                const itemType = this.selectedItem.name.toLowerCase();
+
+                // If crafting arrows, add 20 at a time
+                if (itemType === 'arrow') {
+                    this.inventory.addItem(itemType, 20);
+                    console.log(`Added 20 ${this.selectedItem.name}s to inventory`);
+                } else {
+                    this.inventory.addItem(itemType);
+                    console.log(`Added ${this.selectedItem.name} to inventory`);
+                }
+
+                // Clean up blueprint if it exists
+                if (this.currentBlueprint) {
+                    this.scene.remove(this.currentBlueprint);
+                    this.currentBlueprint = null;
+                }
+
+                this.isCrafting = false;
+                const craftedItem = this.selectedItem.name.toLowerCase();
+                this.selectedItem = null;
+
+                // Hide prompt
+                const promptElement = document.getElementById('interaction-prompt');
+                promptElement.style.display = 'none';
+
+                // Automatically equip bow when crafted
+                if (craftedItem === 'bow' && window.equipWeapon) {
+                    window.equipWeapon('bow');
+                }
+
+                return;
+            }
+
+            // For placeable items, continue with normal placement
+            if (!this.currentBlueprint) {
+                console.error('No blueprint to place');
+                return;
             }
 
             // Create permanent object
